@@ -1,0 +1,32 @@
+{
+  "name": "ai-notes",
+  "private": true,
+  "version": "2.0.0",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/hallidayz/ai-notes.git"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "generate-icons": "node scripts/generate-icons.js"
+  },
+  "dependencies": {
+    "@huggingface/transformers": "^3.7.6",
+    "onnxruntime-web": "^1.23.2",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.14.0",
+    "@types/react": "^19.2.6",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^5.0.0",
+    "sharp": "^0.34.5",
+    "to-ico": "^1.0.1",
+    "typescript": "~5.8.2",
+    "vite": "^6.2.0"
+  }
+}
