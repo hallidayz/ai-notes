@@ -657,29 +657,29 @@ Please check the browser console and terminal logs for more details. Try refresh
         try {
             // Tokenize the input
             progressCallback('Tokenizing input...', 70);
-            // Increase max_length to ensure the full transcript is included
-            // T5 models typically support up to 512 tokens, but we need to balance prompt + transcript
+            // Increase max_length to ensure the full transcript is included.
+            // For transformers.js v3, the tokenizer returns an object with both
+            // input_ids and attention_mask, which we should pass through intact.
             const inputs = this.tokenizer(prompt, {
                 return_tensors: 'pt',
                 padding: true,
                 truncation: true,
-                max_length: 1024  // Increased to allow longer transcripts
+                max_length: 1024
             });
             
-            if (!inputs || !inputs.input_ids) {
-                throw new Error("Tokenizer did not return expected input_ids");
+            if (!inputs || !inputs.input_ids || !inputs.attention_mask) {
+                throw new Error('Tokenizer did not return expected input_ids and attention_mask');
             }
             
-            // Generate output
+            // Generate output – pass the full inputs object so the model
+            // receives both input_ids and attention_mask as required by
+            // the current transformers.js generate() API.
             progressCallback('Generating analysis...', 80);
-            const output = await this.model.generate(
-                inputs.input_ids,
-                {
-                    max_new_tokens: 512,
-                    num_beams: 1,
-                    do_sample: false
-                }
-            );
+            const output = await this.model.generate(inputs, {
+                max_new_tokens: 512,
+                num_beams: 1,
+                do_sample: false
+            });
             
             if (!output || !output[0]) {
                 throw new Error("Model did not return expected output");
@@ -1088,7 +1088,7 @@ class CryptoService {
 // --- DATABASE SERVICE ---
 class TherapyDB {
     private db: IDBDatabase | null = null;
-    private readonly DB_NAME = 'TherapyNotesDB';
+    private readonly DB_NAME = 'meetingmindsDB';
     private readonly SESSIONS_STORE = 'sessions';
     private readonly TASKS_STORE = 'tasks';
     private readonly CONFIG_STORE = 'config';
@@ -1099,7 +1099,7 @@ class TherapyDB {
 
     private init(): Promise<void> {
         return new Promise((resolve, reject) => {
-            const request = indexedDB.open(this.DB_NAME, 3);
+            const request = indexedDB.open(this.DB_NAME, 4); // Increment version for encryption migration
 
             request.onupgradeneeded = (event) => {
                 const db = (event.target as IDBOpenDBRequest).result;
@@ -1133,6 +1133,132 @@ class TherapyDB {
         return this.db!;
     }
 
+    // Helper method to encrypt session sensitive fields
+    private async encryptSession(session: Session, pin: string): Promise<Session> {
+        const encrypted: Session = { ...session };
+        
+        // Encrypt transcript if it exists
+        if (session.transcript) {
+            const transcriptStr = typeof session.transcript === 'string' 
+                ? session.transcript 
+                : JSON.stringify(session.transcript);
+            encrypted.transcript = await CryptoService.encrypt(transcriptStr, pin);
+        }
+        
+        // Encrypt summary if it exists
+        if (session.summary) {
+            const summaryStr = typeof session.summary === 'string' 
+                ? session.summary 
+                : JSON.stringify({ summary: session.summary });
+            encrypted.summary = await CryptoService.encrypt(summaryStr, pin);
+        }
+        
+        // Encrypt todoItems if they exist
+        if (session.todoItems) {
+            const todoStr = typeof session.todoItems === 'string' 
+                ? session.todoItems 
+                : JSON.stringify(session.todoItems);
+            encrypted.todoItems = await CryptoService.encrypt(todoStr, pin);
+        }
+        
+        // Encrypt outline if it exists
+        if (session.outline) {
+            const outlineStr = typeof session.outline === 'string' 
+                ? session.outline 
+                : JSON.stringify({ outline: session.outline });
+            encrypted.outline = await CryptoService.encrypt(outlineStr, pin);
+        }
+        
+        return encrypted;
+    }
+
+    // Helper method to decrypt session sensitive fields
+    private async decryptSession(session: Session, pin: string): Promise<Session> {
+        const decrypted: Session = { ...session };
+        
+        // Decrypt transcript if it exists and is encrypted (check if it's base64-like)
+        if (session.transcript && typeof session.transcript === 'string') {
+            try {
+                // Try to decrypt - if it fails, it might be unencrypted old data
+                decrypted.transcript = await CryptoService.decrypt(session.transcript, pin);
+            } catch {
+                // If decryption fails, assume it's unencrypted JSON or plain text
+                decrypted.transcript = session.transcript;
+            }
+        }
+        
+        // Decrypt summary if it exists
+        if (session.summary && typeof session.summary === 'string') {
+            try {
+                decrypted.summary = await CryptoService.decrypt(session.summary, pin);
+            } catch {
+                decrypted.summary = session.summary;
+            }
+        }
+        
+        // Decrypt todoItems if they exist
+        if (session.todoItems && typeof session.todoItems === 'string') {
+            try {
+                decrypted.todoItems = await CryptoService.decrypt(session.todoItems, pin);
+            } catch {
+                decrypted.todoItems = session.todoItems;
+            }
+        }
+        
+        // Decrypt outline if it exists
+        if (session.outline && typeof session.outline === 'string') {
+            try {
+                decrypted.outline = await CryptoService.decrypt(session.outline, pin);
+            } catch {
+                decrypted.outline = session.outline;
+            }
+        }
+        
+        return decrypted;
+    }
+
+    // Helper method to encrypt task sensitive fields
+    private async encryptTask(task: Task, pin: string): Promise<Task> {
+        const encrypted: Task = { ...task };
+        
+        // Encrypt title
+        if (task.title) {
+            encrypted.title = await CryptoService.encrypt(task.title, pin);
+        }
+        
+        // Encrypt sessionName if it exists
+        if (task.sessionName) {
+            encrypted.sessionName = await CryptoService.encrypt(task.sessionName, pin);
+        }
+        
+        return encrypted;
+    }
+
+    // Helper method to decrypt task sensitive fields
+    private async decryptTask(task: Task, pin: string): Promise<Task> {
+        const decrypted: Task = { ...task };
+        
+        // Decrypt title
+        if (task.title) {
+            try {
+                decrypted.title = await CryptoService.decrypt(task.title, pin);
+            } catch {
+                decrypted.title = task.title; // Assume unencrypted old data
+            }
+        }
+        
+        // Decrypt sessionName if it exists
+        if (task.sessionName) {
+            try {
+                decrypted.sessionName = await CryptoService.decrypt(task.sessionName, pin);
+            } catch {
+                decrypted.sessionName = task.sessionName; // Assume unencrypted old data
+            }
+        }
+        
+        return decrypted;
+    }
+
     public async saveConfig(key: string, value: any): Promise<void> {
         const db = await this.getDb();
         return new Promise((resolve, reject) => {
@@ -1155,48 +1281,68 @@ class TherapyDB {
         });
     }
 
-    public async addSession(session: Session): Promise<number> {
+    public async addSession(session: Session, pin: string): Promise<number> {
         const db = await this.getDb();
+        const encryptedSession = await this.encryptSession(session, pin);
         return new Promise((resolve, reject) => {
             const transaction = db.transaction(this.SESSIONS_STORE, 'readwrite');
             const store = transaction.objectStore(this.SESSIONS_STORE);
-            const request = store.add(session);
+            const request = store.add(encryptedSession);
             request.onsuccess = () => resolve(request.result as number);
             request.onerror = () => reject(request.error);
         });
     }
 
-    public async getAllSessions(): Promise<Session[]> {
+    public async getAllSessions(pin: string): Promise<Session[]> {
         const db = await this.getDb();
-        return new Promise((resolve, reject) => {
+        return new Promise(async (resolve, reject) => {
             const transaction = db.transaction(this.SESSIONS_STORE, 'readonly');
             const store = transaction.objectStore(this.SESSIONS_STORE);
             const request = store.getAll();
-            request.onsuccess = () => {
-                const sortedSessions = request.result.sort((a, b) => b.timestamp - a.timestamp);
-                resolve(sortedSessions);
+            request.onsuccess = async () => {
+                try {
+                    const sortedSessions = request.result.sort((a, b) => b.timestamp - a.timestamp);
+                    const decryptedSessions = await Promise.all(
+                        sortedSessions.map(s => this.decryptSession(s, pin))
+                    );
+                    resolve(decryptedSessions);
+                } catch (error) {
+                    reject(error);
+                }
             };
             request.onerror = () => reject(request.error);
         });
     }
 
-    public async getSession(id: number): Promise<Session | undefined> {
+    public async getSession(id: number, pin: string): Promise<Session | undefined> {
         const db = await this.getDb();
-        return new Promise((resolve, reject) => {
+        return new Promise(async (resolve, reject) => {
             const transaction = db.transaction(this.SESSIONS_STORE, 'readonly');
             const store = transaction.objectStore(this.SESSIONS_STORE);
             const request = store.get(id);
-            request.onsuccess = () => resolve(request.result);
+            request.onsuccess = async () => {
+                if (!request.result) {
+                    resolve(undefined);
+                    return;
+                }
+                try {
+                    const decrypted = await this.decryptSession(request.result, pin);
+                    resolve(decrypted);
+                } catch (error) {
+                    reject(error);
+                }
+            };
             request.onerror = () => reject(request.error);
         });
     }
     
-    public async updateSession(session: Session): Promise<void> {
+    public async updateSession(session: Session, pin: string): Promise<void> {
         const db = await this.getDb();
+        const encryptedSession = await this.encryptSession(session, pin);
         return new Promise((resolve, reject) => {
             const transaction = db.transaction(this.SESSIONS_STORE, 'readwrite');
             const store = transaction.objectStore(this.SESSIONS_STORE);
-            const request = store.put(session);
+            const request = store.put(encryptedSession);
             request.onsuccess = () => resolve();
             request.onerror = () => reject(request.error);
         });
@@ -1214,38 +1360,47 @@ class TherapyDB {
     }
 
     // Task Methods
-    public async addTask(task: Task): Promise<number> {
+    public async addTask(task: Task, pin: string): Promise<number> {
         const db = await this.getDb();
+        const encryptedTask = await this.encryptTask(task, pin);
         return new Promise((resolve, reject) => {
             const transaction = db.transaction(this.TASKS_STORE, 'readwrite');
             const store = transaction.objectStore(this.TASKS_STORE);
-            const request = store.add(task);
+            const request = store.add(encryptedTask);
             request.onsuccess = () => resolve(request.result as number);
             request.onerror = () => reject(request.error);
         });
     }
 
-    public async getAllTasks(): Promise<Task[]> {
+    public async getAllTasks(pin: string): Promise<Task[]> {
         const db = await this.getDb();
-        return new Promise((resolve, reject) => {
+        return new Promise(async (resolve, reject) => {
             const transaction = db.transaction(this.TASKS_STORE, 'readonly');
             const store = transaction.objectStore(this.TASKS_STORE);
             const index = store.index('timestamp');
             const request = index.getAll();
-            request.onsuccess = () => {
-                const sortedTasks = request.result.sort((a, b) => b.timestamp - a.timestamp);
-                resolve(sortedTasks);
+            request.onsuccess = async () => {
+                try {
+                    const sortedTasks = request.result.sort((a, b) => b.timestamp - a.timestamp);
+                    const decryptedTasks = await Promise.all(
+                        sortedTasks.map(t => this.decryptTask(t, pin))
+                    );
+                    resolve(decryptedTasks);
+                } catch (error) {
+                    reject(error);
+                }
             };
             request.onerror = () => reject(request.error);
         });
     }
 
-    public async updateTask(task: Task): Promise<void> {
+    public async updateTask(task: Task, pin: string): Promise<void> {
         const db = await this.getDb();
+        const encryptedTask = await this.encryptTask(task, pin);
         return new Promise((resolve, reject) => {
             const transaction = db.transaction(this.TASKS_STORE, 'readwrite');
             const store = transaction.objectStore(this.TASKS_STORE);
-            const request = store.put(task);
+            const request = store.put(encryptedTask);
             request.onsuccess = () => resolve();
             request.onerror = () => reject(request.error);
         });
@@ -1762,8 +1917,8 @@ const MainApp: React.FC<{ pin: string }> = ({ pin }) => {
         const loadData = async () => {
             try {
                 const [loadedSessions, loadedTasks, savedIndustry, savedLanguage] = await Promise.all([
-                    db.getAllSessions(),
-                    db.getAllTasks(),
+                    db.getAllSessions(pin),
+                    db.getAllTasks(pin),
                     db.getConfig('industry'),
                     db.getConfig('language')
                 ]);
@@ -1829,7 +1984,7 @@ const MainApp: React.FC<{ pin: string }> = ({ pin }) => {
                 newSession.analysisStatus = 'none';
             }
             
-            const id = await db.addSession(newSession);
+            const id = await db.addSession(newSession, pin);
             
             if (audioBlob) {
                 await db.saveAudioBlob(id, audioBlob);
@@ -1864,7 +2019,7 @@ const MainApp: React.FC<{ pin: string }> = ({ pin }) => {
 
     const handleUpdateSession = async (updatedSession: Session) => {
         try {
-            await db.updateSession(updatedSession);
+            await db.updateSession(updatedSession, pin);
             setSessions(prev => prev.map(s => s.id === updatedSession.id ? updatedSession : s));
             if (selectedSession?.id === updatedSession.id) {
                 setSelectedSession(updatedSession);
@@ -1877,7 +2032,7 @@ const MainApp: React.FC<{ pin: string }> = ({ pin }) => {
     const handleAddTask = async (task: Omit<Task, 'id' | 'timestamp'>) => {
         try {
             const newTask = { ...task, timestamp: Date.now() };
-            const id = await db.addTask(newTask);
+            const id = await db.addTask(newTask, pin);
             setTasks(prev => [{ ...newTask, id }, ...prev]);
             showStatus('Task added.', 'success');
             return true;
@@ -1889,7 +2044,7 @@ const MainApp: React.FC<{ pin: string }> = ({ pin }) => {
 
     const handleUpdateTask = async (updatedTask: Task) => {
         try {
-            await db.updateTask(updatedTask);
+            await db.updateTask(updatedTask, pin);
             setTasks(prev => prev.map(t => t.id === updatedTask.id ? updatedTask : t));
         } catch (error) {
             showStatus('Failed to update task.', 'error');
@@ -2092,40 +2247,15 @@ const NewSessionForm: React.FC<{
 
     const handleStartRecording = async () => {
         try {
-            // Step 1: Intelligently select best audio source
-            const audioSource = await intelligentAudioService.selectBestAudioSource();
-            
-            // Step 2: Attempt to create mixed audio stream (mic + system audio)
-            let streamResult = await intelligentAudioService.createMixedAudioStream(audioSource.deviceId);
-            let stream: MediaStream;
-            let sourceDescription = '';
-            
-            if (streamResult && streamResult.type === 'mixed') {
-                // Perfect! We have both mic and system audio
-                stream = streamResult.stream;
-                sourceDescription = `Recording: ${streamResult.sources.join(' + ')}`;
-                setRecordingSource(sourceDescription);
-                showStatus(sourceDescription, 'info', 3000);
-            } else if (streamResult && streamResult.type === 'mic') {
-                // Only microphone
-                stream = streamResult.stream;
-                sourceDescription = `Recording: ${streamResult.sources[0]}`;
-                setRecordingSource(sourceDescription);
-            } else {
-                // Fallback: Try single source
-                stream = await intelligentAudioService.getSingleAudioStream('mic', audioSource.deviceId) || 
-                         await navigator.mediaDevices.getUserMedia({ 
-                             audio: audioSource.deviceId 
-                                 ? { deviceId: { exact: audioSource.deviceId } }
-                                 : true 
-                         });
-                sourceDescription = `Recording: ${audioSource.reason}`;
-                setRecordingSource(sourceDescription);
-            }
-            
-            // Store stream reference for cleanup
+            // Simplified, mic-only recording path for maximum reliability
+            const stream = await navigator.mediaDevices.getUserMedia({
+                audio: { echoCancellation: true, noiseSuppression: true },
+                video: false
+            });
+
             audioStreamRef.current = stream;
-            
+            setRecordingSource('Recording: Microphone');
+
             setIsRecording(true);
             setDuration(0);
             timerRef.current = setInterval(() => setDuration(prev => prev + 1), 1000);
@@ -2133,21 +2263,22 @@ const NewSessionForm: React.FC<{
             // Start audio level monitoring for visual feedback
             startAudioLevelMonitoring(stream);
 
-            // Start MediaRecorder with optimal settings for performance
-            const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus') 
+            const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
                 ? 'audio/webm;codecs=opus'
                 : MediaRecorder.isTypeSupported('audio/webm')
                 ? 'audio/webm'
                 : 'audio/ogg';
-            
+
             const options: MediaRecorderOptions = {
                 mimeType,
-                audioBitsPerSecond: 64000 // Lower bitrate for faster processing
+                audioBitsPerSecond: 64000
             };
-            
+
             mediaRecorderRef.current = new MediaRecorder(stream, options);
             mediaRecorderRef.current.ondataavailable = (e) => {
-                if (e.data.size > 0) chunksRef.current.push(e.data);
+                if (e.data.size > 0) {
+                    chunksRef.current.push(e.data);
+                }
             };
             mediaRecorderRef.current.onstop = () => {
                 const blob = new Blob(chunksRef.current, { type: mimeType });
@@ -2156,12 +2287,14 @@ const NewSessionForm: React.FC<{
                 stream.getTracks().forEach(track => track.stop());
                 stopAudioLevelMonitoring();
             };
-            
-            // Start recording with timeslice for better performance
+
             mediaRecorderRef.current.start(1000); // 1 second chunks
         } catch (err: any) {
             const errorMsg = err?.message || 'Unknown error';
-            showStatus(`Could not start recording: ${errorMsg}. Please ensure you have given microphone permissions.`, 'error');
+            showStatus(
+                `Could not start recording: ${errorMsg}. Please ensure you have given microphone permissions.`,
+                'error'
+            );
             stopAudioLevelMonitoring();
         }
     };
@@ -2267,83 +2400,113 @@ const NewSessionForm: React.FC<{
         <div className="card new-session">
             <h3>New Session</h3>
             <form onSubmit={handleSubmit}>
-                <div className="form-grid">
-                    <input
-                        type="text"
-                        id="session-title"
-                        name="sessionTitle"
-                        placeholder="Session Title"
-                        value={sessionTitle}
-                        onChange={e => setSessionTitle(e.target.value)}
-                        required
-                    />
-                    <input
-                        type="text"
-                        id="session-participants"
-                        name="participants"
-                        placeholder="Participants (optional)"
-                        value={participants}
-                        onChange={e => setParticipants(e.target.value)}
-                    />
-                    <input
-                        type="date"
-                        id="session-date"
-                        name="date"
-                        value={date}
-                        onChange={e => setDate(e.target.value)}
-                        className="grid-col-span-2"
-                    />
-                    <textarea
-                        id="session-notes"
-                        name="notes"
-                        placeholder="Enter notes or a summary here..."
-                        value={notes}
-                        onChange={e => setNotes(e.target.value)}
-                        rows={5}
-                        className="grid-col-span-2"
-                    ></textarea>
-                </div>
-                {recordingSource && (
-                    <div className="recording-source-indicator">
-                        <span className="recording-source-badge">{recordingSource}</span>
-                    </div>
-                )}
-                {isRecording && (
-                    <div className="audio-level-indicator">
-                        <div className="audio-level-bars">
-                            {[...Array(20)].map((_, i) => (
-                                <div
-                                    key={i}
-                                    className="audio-level-bar"
-                                    style={{
-                                        height: `${Math.max(10, (audioLevel / 100) * 100 - (i * 5))}%`,
-                                        opacity: audioLevel > i * 5 ? 1 : 0.3,
-                                        transition: 'all 0.1s ease'
-                                    }}
-                                />
-                            ))}
+                {/* Top two-column layout: left form fields, right notes */}
+                <div className="new-session-grid">
+                    <div className="new-session-grid-left">
+                        <div className="field-group">
+                            <label htmlFor="session-title">Session Title</label>
+                            <input
+                                type="text"
+                                id="session-title"
+                                name="sessionTitle"
+                                placeholder="Session Title"
+                                value={sessionTitle}
+                                onChange={e => setSessionTitle(e.target.value)}
+                                required
+                            />
+                        </div>
+                        <div className="field-group">
+                            <label htmlFor="session-participants">Participants</label>
+                            <input
+                                type="text"
+                                id="session-participants"
+                                name="participants"
+                                placeholder="Participants (optional)"
+                                value={participants}
+                                onChange={e => setParticipants(e.target.value)}
+                            />
+                        </div>
+                        <div className="field-group">
+                            <label htmlFor="session-date">Date</label>
+                            <input
+                                type="date"
+                                id="session-date"
+                                name="date"
+                                value={date}
+                                onChange={e => setDate(e.target.value)}
+                            />
                         </div>
                     </div>
-                )}
-                <div className="recording-controls-with-save">
-                    <div className="recording-controls">
-                        {!isRecording ? (
-                            <button type="button" className="btn-record" onClick={handleStartRecording}>
-                                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16"><path d="M8 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8zm0 1A5 5 0 1 1 8 3a5 5 0 0 1 0 10z"/><path d="M10 8a2 2 0 1 1-4 0 2 2 0 0 1 4 0z"/></svg>
-                                Record
-                            </button>
-                        ) : (
-                            <button type="button" className="btn-record recording" onClick={handleStopRecording}>
-                                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16"><path d="M5.5 5.5A.5.5 0 0 1 6 6v4a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5zm4 0a.5.5 0 0 1 .5.5v4a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5z"/><path d="M0 2a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H2a2 2 0 0 1-2-2V2zm15 0a1 1 0 0 0-1-1H2a1 1 0 0 0-1 1v12a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V2z"/></svg>
-                                Stop ({formatTime(duration)})
-                            </button>
-                        )}
+                    <div className="new-session-grid-right">
+                        <div className="field-group">
+                            <label htmlFor="session-notes">Notes for Reference</label>
+                            <textarea
+                                id="session-notes"
+                                name="notes"
+                                placeholder="Enter notes or a summary here..."
+                                value={notes}
+                                onChange={e => setNotes(e.target.value)}
+                                rows={7}
+                            ></textarea>
+                        </div>
                     </div>
-                    <button type="submit" className="btn-primary" disabled={isSaving || isRecording}>
-                        {isSaving ? 'Saving...' : 'Save Session'}
-                    </button>
                 </div>
-                {audioBlob && <div className="status info">Audio recorded. Save the session to attach it.</div>}
+
+                {/* Live meeting audio section: buttons left, visual right */}
+                <div className="live-audio-section">
+                    <h4>Live Meeting Audio</h4>
+                    <div className="live-audio-grid">
+                        <div className="live-audio-controls">
+                            {recordingSource && (
+                                <div className="recording-source-indicator">
+                                    <span className="recording-source-badge">{recordingSource}</span>
+                                </div>
+                            )}
+                            <div className="recording-controls-with-save live-audio-controls-row">
+                                <div className="recording-controls">
+                                    {!isRecording ? (
+                                        <button type="button" className="btn-record" onClick={handleStartRecording}>
+                                            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16"><path d="M8 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8zm0 1A5 5 0 1 1 8 3a5 5 0 0 1 0 10z"/><path d="M10 8a2 2 0 1 1-4 0 2 2 0 0 1 4 0z"/></svg>
+                                            Start Recording
+                                        </button>
+                                    ) : (
+                                        <button type="button" className="btn-record recording" onClick={handleStopRecording}>
+                                            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16"><path d="M5.5 5.5A.5.5 0 0 1 6 6v4a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5zm4 0a.5.5 0 0 1 .5.5v4a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5z"/><path d="M0 2a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H2a2 2 0 0 1-2-2V2zm15 0a1 1 0 0 0-1-1H2a1 1 0 0 0-1 1v12a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V2z"/></svg>
+                                            Stop &amp; Save ({formatTime(duration)})
+                                        </button>
+                                    )}
+                                </div>
+                                <button type="submit" className="btn-primary" disabled={isSaving || isRecording}>
+                                    {isSaving ? 'Saving...' : 'Save Session'}
+                                </button>
+                            </div>
+                            {audioBlob && (
+                                <div className="status info live-audio-status">
+                                    Audio recorded. Save the session to attach it.
+                                </div>
+                            )}
+                        </div>
+
+                        <div className="live-audio-visual">
+                            {isRecording && (
+                                <div className="audio-level-indicator two-row">
+                                    <div className="audio-level-row">
+                                        <div
+                                            className="audio-level-gradient"
+                                            style={{ transform: `scaleX(${Math.min(1, audioLevel / 70)})` }}
+                                        />
+                                    </div>
+                                    <div className="audio-level-row">
+                                        <div
+                                            className="audio-level-gradient"
+                                            style={{ transform: `scaleX(${Math.min(1, audioLevel / 100)})` }}
+                                        />
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                </div>
             </form>
         </div>
     );
@@ -2923,11 +3086,20 @@ const AudioPlayer: React.FC<{ audioUrl: string }> = ({ audioUrl }) => {
     };
 
     const handleProgressClick = (e: React.MouseEvent<HTMLDivElement>) => {
-        if (audioRef.current && progressRef.current) {
-            const rect = progressRef.current.getBoundingClientRect();
-            const clickX = e.clientX - rect.left;
-            const width = rect.width;
-            const newTime = (clickX / width) * duration;
+        if (!audioRef.current || !progressRef.current) return;
+
+        // Guard against cases where duration is 0, NaN, or not yet known
+        if (!duration || !isFinite(duration)) {
+            return;
+        }
+
+        const rect = progressRef.current.getBoundingClientRect();
+        const clickX = e.clientX - rect.left;
+        const width = rect.width || 1;
+        const ratio = Math.min(1, Math.max(0, clickX / width));
+        const newTime = ratio * duration;
+
+        if (isFinite(newTime)) {
             audioRef.current.currentTime = newTime;
         }
     };
