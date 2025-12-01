@@ -1,7 +1,7 @@
 {
-  "name": "AI Notes",
-  "short_name": "AI Notes",
-  "description": "On-Device, Private, AI Powered Notes",
+  "name": "MiNDS Talk",
+  "short_name": "MiNDS Talk",
+  "description": "Private, secure, on‑device AI that turns every conversation into clear, searchable notes, actions and plans.",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",

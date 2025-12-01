@@ -319,8 +319,11 @@ Please check the browser console and terminal logs for more details. Try refresh
                 const progressHandler = (progress: any) => {
                     if (progress_callback) progress_callback(progress);
                 };
-                this.tokenizer = await transformers.AutoTokenizer.from_pretrained('Xenova/LaMini-Flan-T5-783M', { progress_callback: progressHandler });
-                this.model = await transformers.AutoModelForSeq2SeqLM.from_pretrained('Xenova/LaMini-Flan-T5-783M', { progress_callback: progressHandler });
+                // Upgraded to flan-t5-base for better quality while maintaining reasonable size
+                // flan-t5-base is better than LaMini-Flan-T5-783M for instruction following and JSON generation
+                const modelName = 'Xenova/flan-t5-base';
+                this.tokenizer = await transformers.AutoTokenizer.from_pretrained(modelName, { progress_callback: progressHandler });
+                this.model = await transformers.AutoModelForSeq2SeqLM.from_pretrained(modelName, { progress_callback: progressHandler });
                 
                 // Verify model functionality after load
                 if (!this.tokenizer || typeof this.tokenizer !== 'function') {
@@ -785,6 +788,401 @@ Please check the browser console and terminal logs for more details. Try refresh
 
         // Race between analysis and timeout
         return Promise.race([analyzeWithTimeout(), timeoutPromise]);
+    }
+
+    /**
+     * Transcribe audio to text with speaker identification
+     * Returns processed transcript chunks with speaker labels
+     */
+    public async transcribeAudio(
+        audio: AudioBuffer,
+        progressCallback: (status: string, progress?: number) => void,
+        language?: string
+    ): Promise<Array<{speaker: string, text: string, timestamp: any}>> {
+        // Audio preprocessing (noise suppression)
+        progressCallback('Enhancing audio quality...', 0);
+        const processedAudio = this.preprocessAudio(audio);
+        progressCallback('Audio enhanced', 5);
+
+        // Transcription
+        const lang = language || 'en';
+        progressCallback(`Initializing transcription model (${lang})...`, 5);
+        const transcriber = await this.getTranscriptionPipeline(lang, (p: any) => {
+            if (p.status === 'progress') {
+                progressCallback('Downloading transcription model...', p.progress);
+            }
+        });
+
+        progressCallback('Transcribing audio...', 20);
+        const originalAudioData = processedAudio.getChannelData(0);
+        const originalSampleRate = processedAudio.sampleRate;
+        const duration = processedAudio.duration;
+        
+        const targetSampleRate = 16000;
+        const audioData = this.resampleAudio(originalAudioData, originalSampleRate, targetSampleRate);
+        
+        console.log(`Transcribing audio: ${duration.toFixed(2)}s, original sample rate: ${originalSampleRate}Hz, resampled to: ${targetSampleRate}Hz`);
+
+        const transcriptionPromise = transcriber(audioData, {
+            chunk_length_s: 15,
+            stride_length_s: 2,
+            return_timestamps: true,
+            language: lang !== 'en' ? lang : undefined,
+            sample_rate: targetSampleRate,
+            batch_size: 1,
+        });
+        
+        const transcriptionTimeoutMs = Math.max(20000, Math.ceil(duration * 2000) + 10000);
+        const transcriptionTimeout = new Promise((_, reject) => {
+            setTimeout(() => reject(new Error(`Transcription timeout: Process took longer than ${Math.round(transcriptionTimeoutMs/1000)} seconds.`)), transcriptionTimeoutMs);
+        });
+        
+        const transcription = await Promise.race([transcriptionPromise, transcriptionTimeout]);
+        progressCallback('Transcription complete', 50);
+
+        // Handle different response formats
+        let transcriptChunks: any[] = [];
+        
+        if (typeof transcription === 'string') {
+            transcriptChunks = [{
+                text: transcription,
+                timestamp: [0, processedAudio.duration]
+            }];
+        } else if (transcription?.chunks && Array.isArray(transcription.chunks)) {
+            transcriptChunks = transcription.chunks;
+        } else if (transcription?.text) {
+            transcriptChunks = [{
+                text: transcription.text,
+                timestamp: transcription.timestamps || [0, processedAudio.duration]
+            }];
+        } else if (Array.isArray(transcription)) {
+            transcriptChunks = transcription;
+        } else {
+            console.warn('Unexpected transcription format:', transcription);
+            transcriptChunks = [];
+        }
+
+        // Speaker diarization
+        const SILENCE_THRESHOLD = 1.5;
+        const MIN_CHUNK_DURATION = 0.5;
+        const MAX_SPEAKERS = 10;
+        
+        let currentSpeaker = 1;
+        let lastEndTime = 0;
+        const speakerSegments: Array<{speaker: number, startTime: number, endTime: number, textLength: number}> = [];
+        
+        const processedChunks = transcriptChunks.map((chunk: any, index: number) => {
+            const startTime = chunk.timestamp?.[0] || 0;
+            const endTime = chunk.timestamp?.[1] || startTime;
+            const textLength = chunk.text?.length || 0;
+            const duration = endTime - startTime;
+            const gap = startTime - lastEndTime;
+            
+            if (index === 0) {
+                currentSpeaker = 1;
+            } else if (gap > SILENCE_THRESHOLD && duration > MIN_CHUNK_DURATION) {
+                const prevSegment = speakerSegments[speakerSegments.length - 1];
+                if (prevSegment) {
+                    const avgPrevLength = prevSegment.textLength;
+                    if (Math.abs(textLength - avgPrevLength) > avgPrevLength * 0.5 && gap > SILENCE_THRESHOLD * 1.5) {
+                        currentSpeaker = Math.min(currentSpeaker + 1, MAX_SPEAKERS);
+                    }
+                } else if (gap > SILENCE_THRESHOLD * 2) {
+                    currentSpeaker = Math.min(currentSpeaker + 1, MAX_SPEAKERS);
+                }
+            }
+            
+            speakerSegments.push({
+                speaker: currentSpeaker,
+                startTime,
+                endTime,
+                textLength
+            });
+            
+            lastEndTime = endTime;
+            
+            return {
+                speaker: `Speaker ${currentSpeaker}`,
+                text: chunk.text,
+                timestamp: chunk.timestamp
+            };
+        });
+
+        return processedChunks;
+    }
+
+    /**
+     * Improved JSON parsing with better extraction and validation
+     */
+    private parseJSONResponse(resultText: string, requiredFields: string[] = []): any {
+        if (!resultText || resultText.trim().length === 0) {
+            return null;
+        }
+
+        // Try to find JSON object with improved regex
+        const jsonMatch = resultText.match(/\{[\s\S]*?\}/);
+        if (jsonMatch) {
+            try {
+                const parsed = JSON.parse(jsonMatch[0]);
+                // Validate required fields
+                if (requiredFields.every(field => parsed.hasOwnProperty(field))) {
+                    return parsed;
+                }
+            } catch (parseError) {
+                console.warn('JSON parse error:', parseError);
+            }
+        }
+
+        // Try to find JSON array
+        const arrayMatch = resultText.match(/\[[\s\S]*?\]/);
+        if (arrayMatch) {
+            try {
+                return JSON.parse(arrayMatch[0]);
+            } catch (parseError) {
+                console.warn('JSON array parse error:', parseError);
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Generate summary from transcript
+     */
+    public async generateSummary(
+        transcript: string,
+        industry: string,
+        progressCallback: (status: string, progress?: number) => void
+    ): Promise<string> {
+        await this.getAnalysisPipeline((p: any) => {
+            if (p.status === 'progress') {
+                progressCallback('Loading analysis model...', p.progress);
+            }
+        });
+
+        const industryContext = industry && industry !== 'general' 
+            ? `Context: ${industry === 'therapy' ? 'therapy session' : industry === 'medical' ? 'medical dictation' : industry === 'legal' ? 'legal note' : 'business meeting'}. `
+            : 'Context: general conversation. ';
+        
+        const prompt = `${industryContext}Create a concise summary (2-3 sentences) of this transcript. Return only JSON: {"summary":"text"}\nTranscript: ${transcript}`;
+
+        progressCallback('Generating summary...', 60);
+
+        if (!this.tokenizer || !this.model) {
+            throw new Error("Analysis model not initialized");
+        }
+
+        try {
+            const inputs = this.tokenizer(prompt, {
+                return_tensors: 'pt',
+                padding: true,
+                truncation: true,
+                max_length: 1024
+            });
+            
+            if (!inputs || !inputs.input_ids || !inputs.attention_mask) {
+                throw new Error('Tokenizer did not return expected input_ids and attention_mask');
+            }
+            
+            const output = await this.model.generate(inputs, {
+                max_new_tokens: 256,
+                num_beams: 1,
+                do_sample: false
+            });
+            
+            if (!output || !output[0]) {
+                throw new Error("Model did not return expected output");
+            }
+            
+            const resultText = this.tokenizer.decode(output[0], { skip_special_tokens: true });
+            
+            const parsed = this.parseJSONResponse(resultText, ['summary']);
+            if (parsed && parsed.summary) {
+                return parsed.summary;
+            }
+
+            // Fallback: extract summary from text
+            const summary = this.extractSection(resultText, ['summary', 'Summary']);
+            if (summary) {
+                return summary;
+            }
+
+            // Last resort: use first few sentences
+            const sentences = resultText.split(/[.!?]/).filter(s => s.trim().length > 0);
+            if (sentences.length > 0) {
+                return sentences.slice(0, 2).join('. ').trim() + '.';
+            }
+
+            return 'Unable to generate summary from transcript.';
+        } catch (error: any) {
+            console.error('Summary generation error:', error);
+            throw new Error(`Summary generation failed: ${error?.message || 'Unknown error'}`);
+        }
+    }
+
+    /**
+     * Generate outline from transcript, grouped by topics
+     */
+    public async generateOutline(
+        transcript: string,
+        industry: string,
+        progressCallback: (status: string, progress?: number) => void
+    ): Promise<string> {
+        await this.getAnalysisPipeline((p: any) => {
+            if (p.status === 'progress') {
+                progressCallback('Loading analysis model...', p.progress);
+            }
+        });
+
+        const industryContext = industry && industry !== 'general' 
+            ? `Context: ${industry === 'therapy' ? 'therapy session' : industry === 'medical' ? 'medical dictation' : industry === 'legal' ? 'legal note' : 'business meeting'}. `
+            : 'Context: general conversation. ';
+        
+        const prompt = `${industryContext}Group this transcript into topics/subjects. For each topic, list the main points discussed. Return only JSON: {"outline":"Topic 1: points\\nTopic 2: points\\n..."}\nTranscript: ${transcript}`;
+
+        progressCallback('Creating outline...', 70);
+
+        if (!this.tokenizer || !this.model) {
+            throw new Error("Analysis model not initialized");
+        }
+
+        try {
+            const inputs = this.tokenizer(prompt, {
+                return_tensors: 'pt',
+                padding: true,
+                truncation: true,
+                max_length: 1024
+            });
+            
+            if (!inputs || !inputs.input_ids || !inputs.attention_mask) {
+                throw new Error('Tokenizer did not return expected input_ids and attention_mask');
+            }
+            
+            const output = await this.model.generate(inputs, {
+                max_new_tokens: 512,
+                num_beams: 1,
+                do_sample: false
+            });
+            
+            if (!output || !output[0]) {
+                throw new Error("Model did not return expected output");
+            }
+            
+            const resultText = this.tokenizer.decode(output[0], { skip_special_tokens: true });
+            
+            const parsed = this.parseJSONResponse(resultText, ['outline']);
+            if (parsed && parsed.outline) {
+                // Cluster topics for better formatting
+                return this.clusterTopics(parsed.outline);
+            }
+
+            // Fallback: extract outline from text
+            const outline = this.extractSection(resultText, ['outline', 'Outline', 'structure']);
+            if (outline) {
+                return this.clusterTopics(outline);
+            }
+
+            return 'Unable to generate outline from transcript.';
+        } catch (error: any) {
+            console.error('Outline generation error:', error);
+            throw new Error(`Outline generation failed: ${error?.message || 'Unknown error'}`);
+        }
+    }
+
+    /**
+     * Generate action items from transcript with purpose-aware prompts
+     */
+    public async generateActionItems(
+        transcript: string,
+        industry: string,
+        progressCallback: (status: string, progress?: number) => void
+    ): Promise<string[]> {
+        await this.getAnalysisPipeline((p: any) => {
+            if (p.status === 'progress') {
+                progressCallback('Loading analysis model...', p.progress);
+            }
+        });
+
+        // Purpose-aware prompts for different industries
+        let contextPrompt = '';
+        let actionGuidance = '';
+        
+        switch (industry) {
+            case 'therapy':
+                contextPrompt = 'Context: therapy session. ';
+                actionGuidance = 'Focus on treatment plans, homework assignments, follow-up appointments, emotional insights, and therapeutic goals.';
+                break;
+            case 'medical':
+                contextPrompt = 'Context: medical dictation. ';
+                actionGuidance = 'Focus on diagnoses, medications prescribed, test orders, patient instructions, and follow-up care requirements.';
+                break;
+            case 'legal':
+                contextPrompt = 'Context: legal note. ';
+                actionGuidance = 'Focus on deadlines, document requests, case actions, client tasks, and legal procedures.';
+                break;
+            case 'business':
+                contextPrompt = 'Context: business meeting. ';
+                actionGuidance = 'Focus on decisions made, assignments, deadlines, next steps, and action items for team members.';
+                break;
+            default:
+                contextPrompt = 'Context: general conversation. ';
+                actionGuidance = 'Extract specific, actionable items mentioned in the conversation.';
+        }
+        
+        const prompt = `${contextPrompt}Extract action items from this transcript. Action items must be:
+- Specific and actionable
+- Relevant to ${industry === 'general' ? 'the conversation' : industry} context
+- Include who/what/when if mentioned
+${actionGuidance}
+Return only JSON array: {"action_items":["item1","item2"]}
+Transcript: ${transcript}`;
+
+        progressCallback('Extracting action items...', 80);
+
+        if (!this.tokenizer || !this.model) {
+            throw new Error("Analysis model not initialized");
+        }
+
+        try {
+            const inputs = this.tokenizer(prompt, {
+                return_tensors: 'pt',
+                padding: true,
+                truncation: true,
+                max_length: 1024
+            });
+            
+            if (!inputs || !inputs.input_ids || !inputs.attention_mask) {
+                throw new Error('Tokenizer did not return expected input_ids and attention_mask');
+            }
+            
+            const output = await this.model.generate(inputs, {
+                max_new_tokens: 512,
+                num_beams: 1,
+                do_sample: false
+            });
+            
+            if (!output || !output[0]) {
+                throw new Error("Model did not return expected output");
+            }
+            
+            const resultText = this.tokenizer.decode(output[0], { skip_special_tokens: true });
+            
+            const parsed = this.parseJSONResponse(resultText, ['action_items']);
+            if (parsed && parsed.action_items && Array.isArray(parsed.action_items)) {
+                return parsed.action_items.filter((item: any) => item && typeof item === 'string' && item.trim().length > 0);
+            }
+
+            // Fallback: extract action items from text
+            const actionItems = this.extractList(resultText, ['action items', 'action_items', 'todos', 'to-do', 'tasks']);
+            if (actionItems.length > 0) {
+                return actionItems;
+            }
+
+            return [];
+        } catch (error: any) {
+            console.error('Action items generation error:', error);
+            throw new Error(`Action items generation failed: ${error?.message || 'Unknown error'}`);
+        }
     }
 
     private extractSection(text: string, keywords: string[]): string {
@@ -1974,7 +2372,7 @@ const MainApp: React.FC<{ pin: string }> = ({ pin }) => {
         setTimeout(() => setStatus({ message: '', type: '' }), duration);
     };
 
-    const handleAddSession = async (session: Omit<Session, 'id' | 'timestamp' | 'notes'>, notes: string, audioBlob: Blob | null) => {
+    const handleAddSession = async (session: Omit<Session, 'id' | 'timestamp' | 'notes'>, notes: string, audioBlob: Blob | null): Promise<number | null> => {
         try {
             const encryptedNotes = await CryptoService.encrypt(notes, pin);
             const timestamp = Date.now();
@@ -1992,10 +2390,10 @@ const MainApp: React.FC<{ pin: string }> = ({ pin }) => {
 
             setSessions(prev => [{ ...newSession, id }, ...prev]);
             showStatus('Session saved successfully.', 'success');
-            return true;
+            return id;
         } catch (error) {
             showStatus('Failed to save session.', 'error');
-            return false;
+            return null;
         }
     };
     
@@ -2073,6 +2471,153 @@ const MainApp: React.FC<{ pin: string }> = ({ pin }) => {
         await db.saveConfig('language', newLanguage);
     };
 
+    const handleStartAnalysis = async (sessionId: number) => {
+        let currentSession = sessions.find(s => s.id === sessionId);
+        if (!currentSession) {
+            showStatus('Session not found.', 'error');
+            return;
+        }
+
+        try {
+            const audioBlob = await db.getAudioBlob(sessionId);
+            if (!audioBlob) {
+                showStatus('Audio file not found for this session.', 'error');
+                return;
+            }
+
+            // Get audio buffer
+            const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            const arrayBuffer = await audioBlob.arrayBuffer();
+            const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+
+            // Get industry context and language
+            const sessionIndustry = industry;
+            const sessionLanguage = currentSession.language || language;
+
+            // Step 1: Transcription
+            showStatus('Starting transcription...', 'info');
+            const updatedSession1 = { ...currentSession, analysisStatus: 'pending' as const };
+            await handleUpdateSession(updatedSession1);
+            currentSession = updatedSession1;
+
+            const transcriptChunks = await onDeviceAIService.transcribeAudio(
+                audioBuffer,
+                (status, progress) => {
+                    const progressMsg = progress ? ` (${Math.round(progress)}%)` : '';
+                    showStatus(`Transcribing: ${status}${progressMsg}`, 'info', 5000);
+                },
+                sessionLanguage
+            );
+
+            // Save transcript immediately
+            const transcriptText = transcriptChunks.map(c => c.text).join(' ');
+            if (!transcriptText.trim()) {
+                throw new Error('No speech detected in the audio recording.');
+            }
+
+            const updatedSession2 = {
+                ...currentSession,
+                transcript: JSON.stringify(transcriptChunks),
+                analysisStatus: 'pending' as const
+            };
+            await handleUpdateSession(updatedSession2);
+            currentSession = updatedSession2;
+            showStatus('Transcription complete. Generating summary...', 'info');
+
+            // Step 2: Generate Summary
+            let summary = '';
+            try {
+                summary = await onDeviceAIService.generateSummary(
+                    transcriptText,
+                    sessionIndustry,
+                    (status) => {
+                        showStatus(`Generating summary: ${status}`, 'info', 5000);
+                    }
+                );
+                
+                // Save summary incrementally
+                const updatedSession3 = {
+                    ...currentSession,
+                    summary: JSON.stringify({ summary }),
+                    analysisStatus: 'pending' as const
+                };
+                await handleUpdateSession(updatedSession3);
+                currentSession = updatedSession3;
+                showStatus('Summary complete. Creating outline...', 'info');
+            } catch (summaryError: any) {
+                console.error('Summary generation failed:', summaryError);
+                summary = 'Summary generation failed.';
+                // Continue with other steps even if summary fails
+            }
+
+            // Step 3: Generate Outline
+            let outline = '';
+            try {
+                outline = await onDeviceAIService.generateOutline(
+                    transcriptText,
+                    sessionIndustry,
+                    (status) => {
+                        showStatus(`Creating outline: ${status}`, 'info', 5000);
+                    }
+                );
+                
+                // Save outline incrementally
+                const updatedSession4 = {
+                    ...currentSession,
+                    outline: JSON.stringify({ outline }),
+                    analysisStatus: 'pending' as const
+                };
+                await handleUpdateSession(updatedSession4);
+                currentSession = updatedSession4;
+                showStatus('Outline complete. Extracting action items...', 'info');
+            } catch (outlineError: any) {
+                console.error('Outline generation failed:', outlineError);
+                outline = 'Outline generation failed.';
+                // Continue with action items even if outline fails
+            }
+
+            // Step 4: Generate Action Items
+            let actionItems: string[] = [];
+            try {
+                actionItems = await onDeviceAIService.generateActionItems(
+                    transcriptText,
+                    sessionIndustry,
+                    (status) => {
+                        showStatus(`Extracting action items: ${status}`, 'info', 5000);
+                    }
+                );
+            } catch (actionError: any) {
+                console.error('Action items generation failed:', actionError);
+                actionItems = [];
+                // Continue to final save even if action items fail
+            }
+
+            // Format action items for UI
+            const todoItems: TodoItem[] = actionItems.map((text: string) => ({ text, completed: false }));
+
+            // Final update with all results
+            const finalSession = {
+                ...currentSession,
+                todoItems: JSON.stringify(todoItems),
+                analysisStatus: 'complete' as const
+            };
+
+            await handleUpdateSession(finalSession);
+            showStatus('Analysis complete!', 'success');
+        } catch (error: any) {
+            const errorMessage = error?.message || error?.toString() || "Unknown error occurred";
+            console.error('Analysis Error:', error);
+            
+            // Update session status to failed
+            currentSession = sessions.find(s => s.id === sessionId);
+            if (currentSession) {
+                await handleUpdateSession({ ...currentSession, analysisStatus: 'failed' as const });
+            }
+            
+            showStatus(`Analysis failed: ${errorMessage}`, 'error', 5000);
+        }
+    };
+
     return (
         <div className="container">
             <header>
@@ -2080,7 +2625,7 @@ const MainApp: React.FC<{ pin: string }> = ({ pin }) => {
                 <div className="logo-container">
                     <img 
                         src="/logo.png" 
-                        alt="AI Notes Logo" 
+                        alt="MiNDS Talk Logo" 
                         style={{ 
                             height: '48px', 
                             width: '48px',
@@ -2089,8 +2634,8 @@ const MainApp: React.FC<{ pin: string }> = ({ pin }) => {
                         }} 
                     />
                     <div>
-                        <h1>AI Notes</h1>
-                        <p>Your On-Device, Private, AI Powered Notes</p>
+                        <h1>MiNDS Talk</h1>
+                        <p>Private, secure, on‑device AI that turns every conversation into clear, searchable notes, actions and plans.</p>
                     </div>
                 </div>
                 <p className="author-credit">by AC MiNDS.</p>
@@ -2130,7 +2675,7 @@ const MainApp: React.FC<{ pin: string }> = ({ pin }) => {
             ) : (
                 view === 'sessions' ? (
                     <>
-                        <NewSessionForm onAddSession={handleAddSession} showStatus={showStatus} />
+                        <NewSessionForm onAddSession={handleAddSession} onStartAnalysis={handleStartAnalysis} showStatus={showStatus} industry={industry} />
                         <SessionsList sessions={sessions} onSelect={setSelectedSession} onDelete={handleDeleteSession} pin={pin} />
                     </>
                 ) : (
@@ -2168,14 +2713,17 @@ const ViewSwitcher: React.FC<{ view: 'sessions' | 'tasks', setView: (view: 'sess
 type ShowStatusType = (message: string, type: 'success' | 'error' | 'info', duration?: number) => void;
 
 const NewSessionForm: React.FC<{ 
-    onAddSession: (session: Omit<Session, 'id' | 'timestamp' | 'notes'>, notes: string, audioBlob: Blob | null) => Promise<boolean>,
-    showStatus: ShowStatusType 
-}> = ({ onAddSession, showStatus }) => {
+    onAddSession: (session: Omit<Session, 'id' | 'timestamp' | 'notes'>, notes: string, audioBlob: Blob | null) => Promise<number | null>,
+    onStartAnalysis: (sessionId: number) => Promise<void>,
+    showStatus: ShowStatusType,
+    industry: string
+}> = ({ onAddSession, onStartAnalysis, showStatus, industry }) => {
     const [sessionTitle, setSessionTitle] = useState('');
     const [participants, setParticipants] = useState('');
     const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
     const [notes, setNotes] = useState('');
     const [isRecording, setIsRecording] = useState(false);
+    const [isPaused, setIsPaused] = useState(false);
     const [isSaving, setIsSaving] = useState(false);
     const [audioBlob, setAudioBlob] = useState<Blob | null>(null);
     const [duration, setDuration] = useState(0);
@@ -2188,6 +2736,19 @@ const NewSessionForm: React.FC<{
     const chunksRef = useRef<Blob[]>([]);
     const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
     const dbRef = useRef<TherapyDB | null>(null);
+
+    /**
+     * Generate default title in format: yyyymmdd.timestamp_{purpose}
+     */
+    const generateDefaultTitle = (): string => {
+        const now = new Date();
+        const year = now.getFullYear();
+        const month = String(now.getMonth() + 1).padStart(2, '0');
+        const day = String(now.getDate()).padStart(2, '0');
+        const timestamp = now.getTime();
+        const purpose = industry === 'general' ? 'general' : industry;
+        return `${year}${month}${day}.${timestamp}_${purpose}`;
+    };
 
     /**
      * Start audio level monitoring for visual feedback
@@ -2207,7 +2768,7 @@ const NewSessionForm: React.FC<{
             const dataArray = new Uint8Array(analyser.frequencyBinCount);
             
             const updateLevel = () => {
-                if (!analyserRef.current || !isRecording) {
+                if (!analyserRef.current || !isRecording || isPaused) {
                     return;
                 }
                 
@@ -2257,7 +2818,9 @@ const NewSessionForm: React.FC<{
             setRecordingSource('Recording: Microphone');
 
             setIsRecording(true);
+            setIsPaused(false);
             setDuration(0);
+            chunksRef.current = []; // Clear any previous chunks
             timerRef.current = setInterval(() => setDuration(prev => prev + 1), 1000);
 
             // Start audio level monitoring for visual feedback
@@ -2278,17 +2841,25 @@ const NewSessionForm: React.FC<{
             mediaRecorderRef.current.ondataavailable = (e) => {
                 if (e.data.size > 0) {
                     chunksRef.current.push(e.data);
+                    console.log('Chunk received:', e.data.size, 'bytes. Total chunks:', chunksRef.current.length);
                 }
             };
             mediaRecorderRef.current.onstop = () => {
+                console.log('MediaRecorder stopped. Total chunks:', chunksRef.current.length);
                 const blob = new Blob(chunksRef.current, { type: mimeType });
+                console.log('Blob created:', blob.size, 'bytes, type:', blob.type);
                 setAudioBlob(blob);
-                chunksRef.current = [];
+                // Don't clear chunks here - we need them for saving
                 stream.getTracks().forEach(track => track.stop());
                 stopAudioLevelMonitoring();
             };
+            mediaRecorderRef.current.onerror = (event: any) => {
+                console.error('MediaRecorder error:', event);
+                showStatus('Recording error occurred.', 'error');
+            };
 
             mediaRecorderRef.current.start(1000); // 1 second chunks
+            console.log('MediaRecorder started with mimeType:', mimeType);
         } catch (err: any) {
             const errorMsg = err?.message || 'Unknown error';
             showStatus(
@@ -2299,8 +2870,41 @@ const NewSessionForm: React.FC<{
         }
     };
 
+    const handlePauseRecording = () => {
+        if (mediaRecorderRef.current && isRecording && !isPaused) {
+            mediaRecorderRef.current.pause();
+            setIsPaused(true);
+            if (timerRef.current) clearInterval(timerRef.current);
+            stopAudioLevelMonitoring();
+        }
+    };
+
+    const handleResumeRecording = () => {
+        if (mediaRecorderRef.current && isRecording && isPaused) {
+            mediaRecorderRef.current.resume();
+            setIsPaused(false);
+            timerRef.current = setInterval(() => setDuration(prev => prev + 1), 1000);
+            if (audioStreamRef.current) {
+                startAudioLevelMonitoring(audioStreamRef.current);
+            }
+        }
+    };
+
     const handleStopRecording = async () => {
         if (mediaRecorderRef.current && isRecording) {
+            console.log('Stopping recording. Current chunks:', chunksRef.current.length);
+            
+            // Resume if paused before stopping
+            if (isPaused) {
+                mediaRecorderRef.current.resume();
+                setIsPaused(false);
+            }
+            
+            // Request final data before stopping
+            if (mediaRecorderRef.current.state !== 'inactive') {
+                mediaRecorderRef.current.requestData();
+            }
+            
             mediaRecorderRef.current.stop();
             setIsRecording(false);
             if(timerRef.current) clearInterval(timerRef.current);
@@ -2316,31 +2920,47 @@ const NewSessionForm: React.FC<{
             
             setRecordingSource('');
             
-            // Auto-save session when recording stops (if title exists)
+            // Auto-save session when recording stops - always save, use default title if needed
             // Wait for onstop handler to create the blob, then auto-save
             setTimeout(() => {
                 // The blob will be set in the onstop handler
                 // Check if we have chunks to create a blob from, or wait for state update
                 const checkAndSave = () => {
+                    console.log('Checking for audio to save. Chunks:', chunksRef.current.length, 'audioBlob state:', !!audioBlob);
+                    
                     // Try to get blob from state (set in onstop) or create from chunks
                     let blobToSave: Blob | null = null;
+                    
+                    // First, try to create from chunks (most reliable)
                     if (chunksRef.current.length > 0) {
-                        blobToSave = new Blob(chunksRef.current, { type: 'audio/webm' });
-                    } else if (audioBlob) {
+                        const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+                            ? 'audio/webm;codecs=opus'
+                            : MediaRecorder.isTypeSupported('audio/webm')
+                            ? 'audio/webm'
+                            : 'audio/ogg';
+                        blobToSave = new Blob(chunksRef.current, { type: mimeType });
+                        console.log('Created blob from chunks:', blobToSave.size, 'bytes');
+                    } 
+                    // Fallback to state (might not be updated yet)
+                    else if (audioBlob) {
                         blobToSave = audioBlob;
+                        console.log('Using blob from state:', blobToSave.size, 'bytes');
                     }
                     
-                    if (blobToSave && sessionTitle.trim()) {
+                    if (blobToSave && blobToSave.size > 0) {
+                        console.log('Saving session with blob size:', blobToSave.size, 'bytes');
                         setIsSaving(true);
+                        // Use provided title or generate default
+                        const finalTitle = sessionTitle.trim() || generateDefaultTitle();
                         onAddSession({
-                            sessionTitle,
+                            sessionTitle: finalTitle,
                             participants,
                             date,
                             duration,
                             transcript: [],
-                        }, notes, blobToSave).then(success => {
-                            if (success) {
-                                showStatus('Session saved automatically.', 'success');
+                        }, notes, blobToSave).then(sessionId => {
+                            if (sessionId) {
+                                showStatus('Session saved. Starting transcription...', 'info');
                                 // Reset form
                                 setSessionTitle('');
                                 setParticipants('');
@@ -2348,46 +2968,31 @@ const NewSessionForm: React.FC<{
                                 setAudioBlob(null);
                                 setDuration(0);
                                 chunksRef.current = [];
+                                // Automatically start transcription
+                                onStartAnalysis(sessionId).catch(err => {
+                                    console.error('Failed to start analysis:', err);
+                                });
                             } else {
                                 showStatus('Failed to auto-save session.', 'error');
                             }
                             setIsSaving(false);
+                        }).catch(err => {
+                            console.error('Error saving session:', err);
+                            showStatus('Failed to save session: ' + (err?.message || 'Unknown error'), 'error');
+                            setIsSaving(false);
                         });
-                    } else if (blobToSave && !sessionTitle.trim()) {
-                        showStatus('Recording stopped. Add a title and click "Save Session" to save.', 'info', 5000);
+                    } else {
+                        console.error('No audio to save. Chunks:', chunksRef.current.length, 'Blob size:', blobToSave?.size || 0);
+                        showStatus(`No audio recorded. Chunks: ${chunksRef.current.length}, Blob: ${blobToSave?.size || 0} bytes`, 'error');
                     }
                 };
                 
-                // Wait a bit more for onstop to complete and state to update
-                setTimeout(checkAndSave, 300);
-            }, 500);
+                // Wait for onstop to complete and state to update
+                setTimeout(checkAndSave, 500);
+            }, 100);
         }
     };
 
-    const handleSubmit = async (e: React.FormEvent) => {
-        e.preventDefault();
-        if (!sessionTitle) {
-            showStatus('Session title is required.', 'error');
-            return;
-        }
-        setIsSaving(true);
-        const success = await onAddSession({
-            sessionTitle,
-            participants,
-            date,
-            duration,
-            transcript: [],
-        }, notes, audioBlob);
-        
-        if (success) {
-            setSessionTitle('');
-            setParticipants('');
-            setNotes('');
-            setAudioBlob(null);
-            setDuration(0);
-        }
-        setIsSaving(false);
-    };
     
     const formatTime = (seconds: number) => {
         const h = Math.floor(seconds / 3600).toString().padStart(2, '0');
@@ -2399,7 +3004,7 @@ const NewSessionForm: React.FC<{
     return (
         <div className="card new-session">
             <h3>New Session</h3>
-            <form onSubmit={handleSubmit}>
+            <form onSubmit={(e) => e.preventDefault()}>
                 {/* Top two-column layout: left form fields, right notes */}
                 <div className="new-session-grid">
                     <div className="new-session-grid-left">
@@ -2409,10 +3014,9 @@ const NewSessionForm: React.FC<{
                                 type="text"
                                 id="session-title"
                                 name="sessionTitle"
-                                placeholder="Session Title"
+                                placeholder="Session Title (optional - auto-generated if empty)"
                                 value={sessionTitle}
                                 onChange={e => setSessionTitle(e.target.value)}
-                                required
                             />
                         </div>
                         <div className="field-group">
@@ -2470,25 +3074,35 @@ const NewSessionForm: React.FC<{
                                             Start Recording
                                         </button>
                                     ) : (
-                                        <button type="button" className="btn-record recording" onClick={handleStopRecording}>
-                                            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16"><path d="M5.5 5.5A.5.5 0 0 1 6 6v4a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5zm4 0a.5.5 0 0 1 .5.5v4a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5z"/><path d="M0 2a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H2a2 2 0 0 1-2-2V2zm15 0a1 1 0 0 0-1-1H2a1 1 0 0 0-1 1v12a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V2z"/></svg>
-                                            Stop &amp; Save ({formatTime(duration)})
-                                        </button>
+                                        <>
+                                            {!isPaused ? (
+                                                <button type="button" className="btn-record" onClick={handlePauseRecording}>
+                                                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16"><path d="M5.5 3.5A.5.5 0 0 1 6 4v8a.5.5 0 0 1-1 0V4a.5.5 0 0 1 .5-.5zm5 0A.5.5 0 0 1 11 4v8a.5.5 0 0 1-1 0V4a.5.5 0 0 1 .5-.5z"/></svg>
+                                                    Pause
+                                                </button>
+                                            ) : (
+                                                <button type="button" className="btn-record" onClick={handleResumeRecording}>
+                                                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16"><path d="m11.596 8.697-6.363 3.692c-.54.313-1.233-.066-1.233-.697V4.308c0-.63.692-1.01 1.233-.696l6.363 3.692a.802.802 0 0 1 0 1.393z"/></svg>
+                                                    Resume
+                                                </button>
+                                            )}
+                                            <button type="button" className="btn-record recording" onClick={handleStopRecording}>
+                                                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16"><path d="M5.5 5.5A.5.5 0 0 1 6 6v4a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5zm4 0a.5.5 0 0 1 .5.5v4a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5z"/><path d="M0 2a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H2a2 2 0 0 1-2-2V2zm15 0a1 1 0 0 0-1-1H2a1 1 0 0 0-1 1v12a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V2z"/></svg>
+                                                Stop &amp; Save ({formatTime(duration)})
+                                            </button>
+                                        </>
                                     )}
                                 </div>
-                                <button type="submit" className="btn-primary" disabled={isSaving || isRecording}>
-                                    {isSaving ? 'Saving...' : 'Save Session'}
-                                </button>
                             </div>
-                            {audioBlob && (
+                            {isSaving && (
                                 <div className="status info live-audio-status">
-                                    Audio recorded. Save the session to attach it.
+                                    Saving session and starting transcription...
                                 </div>
                             )}
                         </div>
 
                         <div className="live-audio-visual">
-                            {isRecording && (
+                            {isRecording && !isPaused && (
                                 <div className="audio-level-indicator two-row">
                                     <div className="audio-level-row">
                                         <div
@@ -2785,8 +3399,10 @@ const SessionDetailModal: React.FC<{
         // Reset status and progress
         setAiAnalysisStatus('in_progress');
         const analysisStartTime = performance.now();
-        setAiProgress({ status: 'Starting analysis...', progress: 0 });
-        onUpdate({ ...session, analysisStatus: 'pending', audioBlob });
+        setAiProgress({ status: 'Starting transcription...', progress: 0 });
+        let currentSession = { ...session, analysisStatus: 'pending' as const, audioBlob };
+        onUpdate(currentSession);
+        
         try {
             if (!audioBlob) {
                 throw new Error("Audio file not found for this session.");
@@ -2800,54 +3416,113 @@ const SessionDetailModal: React.FC<{
             const arrayBuffer = await audioBlob.arrayBuffer();
             const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
 
-            // Get industry context and language from database (use global db instance)
+            // Get industry context and language from database
             const industry = await db.getConfig('industry') || 'general';
             const language = session.language || await db.getConfig('language') || 'en';
             
-            const resultJson = await onDeviceAIService.analyze(
-                audioBuffer, 
+            // Step 1: Transcription
+            setAiProgress({ status: 'Transcribing audio...', progress: 10 });
+            const transcriptChunks = await onDeviceAIService.transcribeAudio(
+                audioBuffer,
                 (status, progress) => {
                     const elapsed = Math.round((performance.now() - analysisStartTime) / 1000);
-                    const timeRemaining = Math.max(0, 60 - elapsed);
                     setAiProgress({ 
-                        status: `${status} (${elapsed}s / ${timeRemaining}s remaining)`, 
-                        progress: progress || 0 
+                        status: `Transcribing: ${status}`, 
+                        progress: progress ? 10 + (progress * 0.3) : 10
                     });
                 },
-                industry,
-                language,
-                60000 // 60 second timeout
+                language
             );
-            
-            // Parse JSON result from AI processing
-            let result: any;
+
+            // Save transcript immediately
+            const transcriptText = transcriptChunks.map(c => c.text).join(' ');
+            if (!transcriptText.trim()) {
+                throw new Error('No speech detected in the audio recording.');
+            }
+
+            currentSession = {
+                ...currentSession,
+                transcript: JSON.stringify(transcriptChunks),
+                analysisStatus: 'pending' as const
+            };
+            onUpdate(currentSession);
+            setAiProgress({ status: 'Transcription complete. Generating summary...', progress: 40 });
+
+            // Step 2: Generate Summary
+            let summary = '';
             try {
-                result = JSON.parse(resultJson);
-            } catch (parseError) {
-                throw new Error('Invalid JSON response from AI analysis');
+                summary = await onDeviceAIService.generateSummary(
+                    transcriptText,
+                    industry,
+                    (status) => {
+                        setAiProgress({ status: `Generating summary: ${status}`, progress: 50 });
+                    }
+                );
+                
+                currentSession = {
+                    ...currentSession,
+                    summary: JSON.stringify({ summary }),
+                    analysisStatus: 'pending' as const
+                };
+                onUpdate(currentSession);
+                setAiProgress({ status: 'Summary complete. Creating outline...', progress: 60 });
+            } catch (summaryError: any) {
+                console.error('Summary generation failed:', summaryError);
+                summary = 'Summary generation failed.';
             }
-            
-            // Check if result contains an error
-            if (result.error) {
-                throw new Error(result.message || 'AI analysis failed');
+
+            // Step 3: Generate Outline
+            let outline = '';
+            try {
+                outline = await onDeviceAIService.generateOutline(
+                    transcriptText,
+                    industry,
+                    (status) => {
+                        setAiProgress({ status: `Creating outline: ${status}`, progress: 70 });
+                    }
+                );
+                
+                currentSession = {
+                    ...currentSession,
+                    outline: JSON.stringify({ outline }),
+                    analysisStatus: 'pending' as const
+                };
+                onUpdate(currentSession);
+                setAiProgress({ status: 'Outline complete. Extracting action items...', progress: 80 });
+            } catch (outlineError: any) {
+                console.error('Outline generation failed:', outlineError);
+                outline = 'Outline generation failed.';
             }
-            
-            // Format data for UI display (PWA layer handles formatting)
-            const todoItems: TodoItem[] = (result.action_items || []).map((text: string) => ({ text, completed: false }));
-            
-            // Store structured data as JSON strings (already JSON from AI function)
-            const updatedSession = {
-                ...session,
-                transcript: JSON.stringify(result.transcript),
-                summary: JSON.stringify({ summary: result.summary }),
+
+            // Step 4: Generate Action Items
+            let actionItems: string[] = [];
+            try {
+                actionItems = await onDeviceAIService.generateActionItems(
+                    transcriptText,
+                    industry,
+                    (status) => {
+                        setAiProgress({ status: `Extracting action items: ${status}`, progress: 90 });
+                    }
+                );
+            } catch (actionError: any) {
+                console.error('Action items generation failed:', actionError);
+                actionItems = [];
+            }
+
+            // Format action items for UI
+            const todoItems: TodoItem[] = actionItems.map((text: string) => ({ text, completed: false }));
+
+            // Final update with all results
+            const finalSession = {
+                ...currentSession,
                 todoItems: JSON.stringify(todoItems),
-                outline: JSON.stringify({ outline: result.outline }),
                 analysisStatus: 'complete' as const,
                 audioBlob
             };
             
-            onUpdate(updatedSession);
+            onUpdate(finalSession);
             setAiAnalysisStatus('complete');
+            setAiProgress({ status: 'Analysis complete!', progress: 100 });
 
         } catch (error: any) {
             const errorMessage = error?.message || error?.toString() || "Unknown error occurred";
