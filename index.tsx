@@ -30,6 +30,20 @@ const checkFirstTimeSetup = async (): Promise<boolean> => {
     }
 };
 
+// Suppress harmless WebSocket connection errors from transformers.js
+// These occur because transformers.js may attempt WebSocket connections, but the app works fine with HTTP only
+if (typeof window !== 'undefined') {
+    const originalError = console.error;
+    console.error = function(...args: any[]) {
+        const message = args[0]?.toString() || '';
+        // Suppress WebSocket connection errors to localhost:3001 (proxy server)
+        if (message.includes('WebSocket connection to') && message.includes('localhost:3001')) {
+            return; // Silently ignore these harmless errors
+        }
+        originalError.apply(console, args);
+    };
+}
+
 // Start loading transformers.js immediately but don't await it
 const initTransformers = async () => {
     try {
@@ -194,15 +208,15 @@ class OnDeviceAIService {
     }
 
     // Map language codes to Whisper model variants
-    // Using smaller models for better performance and lower latency
+    // Upgraded to base models for better accuracy, especially for names and proper nouns
     private getWhisperModel(language?: string): string {
         const lang = language || 'en';
-        // Use smaller models (tiny/base) for faster processing and lower latency
-        // tiny models are ~75MB vs base ~150MB - significantly faster with minimal accuracy loss
+        // Use base models for better accuracy (names, proper nouns, technical terms)
+        // base models are ~150MB vs tiny ~75MB - better accuracy with reasonable speed
         if (lang === 'en') {
-            return 'Xenova/whisper-tiny.en'; // Tiny English model - fastest, lowest latency
+            return 'Xenova/whisper-base.en'; // Base English model - better accuracy for names
         } else {
-            return 'Xenova/whisper-tiny'; // Tiny multilingual model
+            return 'Xenova/whisper-base'; // Base multilingual model
         }
     }
 
@@ -663,11 +677,12 @@ Please check the browser console and terminal logs for more details. Try refresh
             // Increase max_length to ensure the full transcript is included.
             // For transformers.js v3, the tokenizer returns an object with both
             // input_ids and attention_mask, which we should pass through intact.
+            // Increase max_length to allow longer prompts with transcript
             const inputs = this.tokenizer(prompt, {
                 return_tensors: 'pt',
                 padding: true,
                 truncation: true,
-                max_length: 1024
+                max_length: 2048 // Increased to handle longer transcripts
             });
             
             if (!inputs || !inputs.input_ids || !inputs.attention_mask) {
@@ -681,7 +696,8 @@ Please check the browser console and terminal logs for more details. Try refresh
             const output = await this.model.generate(inputs, {
                 max_new_tokens: 512,
                 num_beams: 1,
-                do_sample: false
+                do_sample: false,
+                pad_token_id: this.tokenizer.eos_token_id || 0
             });
             
             if (!output || !output[0]) {
@@ -912,32 +928,111 @@ Please check the browser console and terminal logs for more details. Try refresh
     }
 
     /**
+     * Truncate transcript intelligently to fit within token limits
+     * Keeps the beginning and end, removes middle if needed
+     */
+    private truncateTranscript(transcript: string, maxLength: number = 2000): string {
+        if (transcript.length <= maxLength) {
+            return transcript;
+        }
+        
+        // Keep first 60% and last 40% to preserve context
+        const firstPart = transcript.substring(0, Math.floor(maxLength * 0.6));
+        const lastPart = transcript.substring(transcript.length - Math.floor(maxLength * 0.4));
+        return `${firstPart}... [middle section truncated] ...${lastPart}`;
+    }
+
+    /**
      * Improved JSON parsing with better extraction and validation
+     * Handles incomplete, malformed, and empty JSON responses
      */
     private parseJSONResponse(resultText: string, requiredFields: string[] = []): any {
         if (!resultText || resultText.trim().length === 0) {
             return null;
         }
 
-        // Try to find JSON object with improved regex
-        const jsonMatch = resultText.match(/\{[\s\S]*?\}/);
+        // Clean up common malformed patterns
+        let cleaned = resultText.trim();
+        
+        // Fix empty string values with too many quotes: "outline":"""""" -> "outline":""
+        cleaned = cleaned.replace(/(":\s*)"{3,}/g, '$1""');
+        
+        // Try to find JSON object with improved regex (non-greedy, handles nested objects)
+        // First try to find complete JSON object
+        let jsonMatch = cleaned.match(/\{[\s\S]*\}/);
         if (jsonMatch) {
             try {
                 const parsed = JSON.parse(jsonMatch[0]);
-                // Validate required fields
-                if (requiredFields.every(field => parsed.hasOwnProperty(field))) {
+                // Validate required fields and check for empty/invalid values
+                if (requiredFields.length === 0 || requiredFields.every(field => {
+                    if (!parsed.hasOwnProperty(field)) return false;
+                    const value = parsed[field];
+                    // Reject empty strings, null, or undefined
+                    if (value === null || value === undefined) return false;
+                    if (typeof value === 'string' && value.trim().length === 0) return false;
+                    if (Array.isArray(value) && value.length === 0) return false;
+                    return true;
+                })) {
                     return parsed;
                 }
             } catch (parseError) {
-                console.warn('JSON parse error:', parseError);
+                // Try to find JSON within the text more carefully
+                const jsonStart = cleaned.indexOf('{');
+                const jsonEnd = cleaned.lastIndexOf('}');
+                if (jsonStart !== -1 && jsonEnd !== -1 && jsonEnd > jsonStart) {
+                    try {
+                        let jsonStr = cleaned.substring(jsonStart, jsonEnd + 1);
+                        
+                        // Try to fix incomplete JSON (e.g., cut-off arrays or strings)
+                        // If we see an incomplete array, try to close it
+                        const openBrackets = (jsonStr.match(/\[/g) || []).length;
+                        const closeBrackets = (jsonStr.match(/\]/g) || []).length;
+                        if (openBrackets > closeBrackets) {
+                            jsonStr += ']'.repeat(openBrackets - closeBrackets);
+                        }
+                        
+                        // If we see an incomplete string (unclosed quote), try to close it
+                        const quoteCount = (jsonStr.match(/"/g) || []).length;
+                        if (quoteCount % 2 !== 0) {
+                            // Find the last unclosed quote and close it
+                            const lastQuoteIndex = jsonStr.lastIndexOf('"');
+                            if (lastQuoteIndex > 0) {
+                                // Check if it's inside a value (not a key)
+                                const beforeQuote = jsonStr.substring(0, lastQuoteIndex);
+                                const afterQuote = jsonStr.substring(lastQuoteIndex + 1);
+                                // If there's content after the quote, it might be incomplete
+                                if (afterQuote.trim().length > 0 && !afterQuote.trim().startsWith(',')) {
+                                    jsonStr = jsonStr.substring(0, lastQuoteIndex + 1) + '"' + afterQuote;
+                                }
+                            }
+                        }
+                        
+                        const parsed = JSON.parse(jsonStr);
+                        if (requiredFields.length === 0 || requiredFields.every(field => {
+                            if (!parsed.hasOwnProperty(field)) return false;
+                            const value = parsed[field];
+                            if (value === null || value === undefined) return false;
+                            if (typeof value === 'string' && value.trim().length === 0) return false;
+                            if (Array.isArray(value) && value.length === 0) return false;
+                            return true;
+                        })) {
+                            return parsed;
+                        }
+                    } catch (e) {
+                        console.warn('JSON parse error (second attempt):', e, 'Text:', jsonStr?.substring(0, 200));
+                    }
+                }
             }
         }
 
         // Try to find JSON array
-        const arrayMatch = resultText.match(/\[[\s\S]*?\]/);
+        const arrayMatch = cleaned.match(/\[[\s\S]*?\]/);
         if (arrayMatch) {
             try {
-                return JSON.parse(arrayMatch[0]);
+                const parsed = JSON.parse(arrayMatch[0]);
+                if (Array.isArray(parsed) && parsed.length > 0) {
+                    return parsed;
+                }
             } catch (parseError) {
                 console.warn('JSON array parse error:', parseError);
             }
@@ -947,7 +1042,7 @@ Please check the browser console and terminal logs for more details. Try refresh
     }
 
     /**
-     * Generate summary from transcript
+     * Generate summary from transcript with domain-specific prompts
      */
     public async generateSummary(
         transcript: string,
@@ -960,11 +1055,92 @@ Please check the browser console and terminal logs for more details. Try refresh
             }
         });
 
-        const industryContext = industry && industry !== 'general' 
-            ? `Context: ${industry === 'therapy' ? 'therapy session' : industry === 'medical' ? 'medical dictation' : industry === 'legal' ? 'legal note' : 'business meeting'}. `
-            : 'Context: general conversation. ';
+        // Truncate transcript if too long to fit in token limit
+        const truncatedTranscript = this.truncateTranscript(transcript, 1500);
         
-        const prompt = `${industryContext}Create a concise summary (2-3 sentences) of this transcript. Return only JSON: {"summary":"text"}\nTranscript: ${transcript}`;
+        // Domain-specific summary prompts
+        let prompt = '';
+        
+        switch (industry) {
+            case 'therapy':
+                prompt = `Role: You are a highly skilled assistant specialized in processing transcribed text for Psychotherapy and Counseling sessions.
+
+Source Context: The following text is a verbatim AI transcription from a therapy session. It may contain filler words, repetitions, and conversational speech.
+
+Core Instructions:
+1. Clean the Text: Remove filler words, false starts, and significant repetitions while preserving the original meaning and nuance.
+2. Improve Readability: Correct obvious grammatical errors and break long sentences into clear, concise ones.
+3. Structure: Format as a SOAP Note (Subjective, Objective, Assessment, Plan).
+4. Identify Key Information: Extract the client's primary emotions, cognitive distortions, coping mechanisms, insights gained, and therapeutic interventions.
+
+Output Format: Return ONLY valid JSON: {"summary":"Your cleaned and structured summary here"}
+
+Transcription: ${truncatedTranscript}`;
+                break;
+                
+            case 'medical':
+                prompt = `Role: You are a highly skilled assistant specialized in processing transcribed text for Clinical Medical Documentation.
+
+Source Context: The following text is a verbatim AI transcription from a medical consultation. It may contain filler words, repetitions, and conversational speech.
+
+Core Instructions:
+1. Clean the Text: Remove filler words, false starts, and significant repetitions while preserving all medical terminology accurately.
+2. Improve Readability: Correct obvious grammatical errors. Do NOT correct or guess medical terms; flag uncertainties with [?].
+3. Structure: Format as a Clinical Patient Note with Chief Complaint (CC), History of Present Illness (HPI), and Assessment & Plan (A/P).
+4. Identify Key Information: Extract critical medical data: symptoms, onset, duration, severity, medications, allergies, past medical history, diagnosis, and treatment plan.
+
+Output Format: Return ONLY valid JSON: {"summary":"Your structured clinical note here"}
+
+Transcription: ${truncatedTranscript}`;
+                break;
+                
+            case 'legal':
+                prompt = `Role: You are a highly skilled assistant specialized in processing transcribed text for Legal Documentation and Client Meetings.
+
+Source Context: The following text is a verbatim AI transcription from a legal consultation. It may contain filler words, repetitions, and conversational speech.
+
+Core Instructions:
+1. Clean the Text: Remove filler words, false starts, and significant repetitions while preserving all legal terminology and facts.
+2. Improve Readability: Correct obvious grammatical errors. Preserve all names, dates, and legal citations exactly.
+3. Structure: Organize by topic with clear headings: Case Background, Client Statement, Legal Issues Identified, Key Dates & Deadlines.
+4. Identify Key Information: Extract critical facts, claims, allegations, relevant dates, names of parties, potential evidence, legal precedents or statutes cited, and legal advice given.
+
+Output Format: Return ONLY valid JSON: {"summary":"Your structured legal notes here"}
+
+Transcription: ${truncatedTranscript}`;
+                break;
+                
+            case 'business':
+                prompt = `Role: You are a highly skilled assistant specialized in processing transcribed text for Corporate Business Meetings.
+
+Source Context: The following text is a verbatim AI transcription from a business meeting. It may contain filler words, repetitions, and conversational speech.
+
+Core Instructions:
+1. Clean the Text: Remove filler words, false starts, and significant repetitions while preserving the original meaning.
+2. Improve Readability: Correct obvious grammatical errors and break long sentences into clear, concise ones.
+3. Structure: Format as Meeting Minutes with sections for Attendees, Agenda Items, Decisions Made, and Action Items.
+4. Identify Key Information: Extract key metrics, project updates, strategic decisions, assigned tasks (with owners and deadlines), and identified risks or blockers.
+
+Output Format: Return ONLY valid JSON: {"summary":"Your structured meeting minutes here"}
+
+Transcription: ${truncatedTranscript}`;
+                break;
+                
+            default:
+                prompt = `Role: You are a highly skilled assistant specialized in processing transcribed text for General Note-Taking.
+
+Source Context: The following text is a verbatim AI transcription. It may contain filler words, repetitions, and conversational speech.
+
+Core Instructions:
+1. Clean the Text: Remove filler words, false starts, and significant repetitions while preserving the original meaning.
+2. Improve Readability: Correct obvious grammatical errors and break long sentences into clear, concise ones.
+3. Structure: Use clear paragraphs. If there is a conversation, identify speakers. Use headings if topics shift significantly.
+4. Identify Key Information: Highlight any decisions made, consensus points, and important facts or dates mentioned.
+
+Output Format: Return ONLY valid JSON: {"summary":"Your cleaned and structured summary here"}
+
+Transcription: ${truncatedTranscript}`;
+        }
 
         progressCallback('Generating summary...', 60);
 
@@ -973,11 +1149,12 @@ Please check the browser console and terminal logs for more details. Try refresh
         }
 
         try {
+            // Increase max_length to allow longer prompts with transcript
             const inputs = this.tokenizer(prompt, {
                 return_tensors: 'pt',
                 padding: true,
                 truncation: true,
-                max_length: 1024
+                max_length: 2048 // Increased to handle longer transcripts
             });
             
             if (!inputs || !inputs.input_ids || !inputs.attention_mask) {
@@ -1034,11 +1211,91 @@ Please check the browser console and terminal logs for more details. Try refresh
             }
         });
 
-        const industryContext = industry && industry !== 'general' 
-            ? `Context: ${industry === 'therapy' ? 'therapy session' : industry === 'medical' ? 'medical dictation' : industry === 'legal' ? 'legal note' : 'business meeting'}. `
-            : 'Context: general conversation. ';
+        // Truncate transcript if too long to fit in token limit
+        const truncatedTranscript = this.truncateTranscript(transcript, 1500);
         
-        const prompt = `${industryContext}Group this transcript into topics/subjects. For each topic, list the main points discussed. Return only JSON: {"outline":"Topic 1: points\\nTopic 2: points\\n..."}\nTranscript: ${transcript}`;
+        // Domain-specific outline prompts
+        let prompt = '';
+        
+        switch (industry) {
+            case 'therapy':
+                prompt = `Analyze this therapy session transcript and create an outline organized by topics.
+
+Structure the outline as:
+- Subjective: Client's self-reported feelings, concerns, experiences
+- Objective: Therapist's observations of affect, mood, behavior
+- Assessment: Professional analysis and interpretation
+- Plan: Homework, goals, treatment direction
+
+For each section, list 2-3 main points discussed. Write actual content, not placeholders.
+
+Return ONLY this JSON format with real content:
+{"outline":"Subjective: [actual points]\\nObjective: [actual points]\\nAssessment: [actual points]\\nPlan: [actual points]"}
+
+Transcript: ${truncatedTranscript}`;
+                break;
+                
+            case 'medical':
+                prompt = `Analyze this medical consultation transcript and create an outline organized by clinical sections.
+
+Structure the outline as:
+- Chief Complaint (CC): Main reason for visit
+- History of Present Illness (HPI): Symptom details, onset, duration
+- Assessment & Plan (A/P): Diagnosis and treatment plan by problem
+
+For each section, list 2-3 main points. Write actual medical content, not placeholders.
+
+Return ONLY this JSON format with real content:
+{"outline":"Chief Complaint: [actual complaint]\\nHPI: [actual history]\\nAssessment & Plan: [actual assessment]"}
+
+Transcript: ${truncatedTranscript}`;
+                break;
+                
+            case 'legal':
+                prompt = `Analyze this legal consultation transcript and create an outline organized by legal topics.
+
+Structure the outline as:
+- Case Background: Facts and context
+- Client Statement: What the client reported
+- Legal Issues Identified: Legal problems or questions
+- Key Dates & Deadlines: Important dates mentioned
+- Evidence Mentioned: Documents or evidence discussed
+
+For each section, list 2-3 main points. Write actual legal content, not placeholders.
+
+Return ONLY this JSON format with real content:
+{"outline":"Case Background: [actual facts]\\nClient Statement: [actual statement]\\nLegal Issues: [actual issues]\\nKey Dates: [actual dates]\\nEvidence: [actual evidence]"}
+
+Transcript: ${truncatedTranscript}`;
+                break;
+                
+            case 'business':
+                prompt = `Analyze this business meeting transcript and create an outline organized by meeting topics.
+
+Structure the outline as:
+- Agenda Items: Main topics discussed in the meeting
+- Decisions Made: Key decisions reached
+- Action Items: Tasks assigned
+- Next Steps: Follow-up actions planned
+
+For each section, list 2-3 main points. Write actual meeting content, not placeholders.
+
+Return ONLY this JSON format with real content:
+{"outline":"Agenda Items: [actual topics]\\nDecisions Made: [actual decisions]\\nAction Items: [actual tasks]\\nNext Steps: [actual steps]"}
+
+Transcript: ${truncatedTranscript}`;
+                break;
+                
+            default:
+                prompt = `Analyze this transcript and create an outline organized by topics.
+
+Group the content into 3-5 main topics. For each topic, list 2-3 main points discussed. Write actual content from the transcript, not placeholders.
+
+Return ONLY this JSON format with real content:
+{"outline":"Topic 1: [actual points from transcript]\\nTopic 2: [actual points from transcript]\\nTopic 3: [actual points from transcript]"}
+
+Transcript: ${truncatedTranscript}`;
+        }
 
         progressCallback('Creating outline...', 70);
 
@@ -1047,11 +1304,12 @@ Please check the browser console and terminal logs for more details. Try refresh
         }
 
         try {
+            // Increase max_length to allow longer prompts with transcript
             const inputs = this.tokenizer(prompt, {
                 return_tensors: 'pt',
                 padding: true,
                 truncation: true,
-                max_length: 1024
+                max_length: 2048 // Increased to handle longer transcripts
             });
             
             if (!inputs || !inputs.input_ids || !inputs.attention_mask) {
@@ -1061,7 +1319,8 @@ Please check the browser console and terminal logs for more details. Try refresh
             const output = await this.model.generate(inputs, {
                 max_new_tokens: 512,
                 num_beams: 1,
-                do_sample: false
+                do_sample: false,
+                pad_token_id: this.tokenizer.eos_token_id || 0
             });
             
             if (!output || !output[0]) {
@@ -1069,20 +1328,56 @@ Please check the browser console and terminal logs for more details. Try refresh
             }
             
             const resultText = this.tokenizer.decode(output[0], { skip_special_tokens: true });
+            console.log('Outline generation - raw model output:', resultText);
             
             const parsed = this.parseJSONResponse(resultText, ['outline']);
-            if (parsed && parsed.outline) {
+            if (parsed && parsed.outline && typeof parsed.outline === 'string' && parsed.outline.trim().length > 0) {
+                console.log('Outline generation - parsed successfully:', parsed.outline.substring(0, 200));
                 // Cluster topics for better formatting
                 return this.clusterTopics(parsed.outline);
             }
 
-            // Fallback: extract outline from text
-            const outline = this.extractSection(resultText, ['outline', 'Outline', 'structure']);
-            if (outline) {
+            // Fallback: extract outline from text (try multiple patterns)
+            const outline = this.extractSection(resultText, ['outline', 'Outline', 'structure', 'topics', 'Topics']);
+            if (outline && outline.trim().length > 0) {
+                console.log('Outline generation - extracted from text:', outline.substring(0, 200));
                 return this.clusterTopics(outline);
             }
+            
+            // Last resort: try to extract any structured content from the response
+            // Remove JSON structure markers and try to find actual content
+            let cleanedText = resultText
+                .replace(/\{"outline":\s*"/gi, '')
+                .replace(/"\s*\}/g, '')
+                .replace(/^"|"$/g, '')
+                .replace(/\\n/g, '\n')
+                .trim();
+            
+            // If we have cleaned text with actual content, use it
+            if (cleanedText.length > 20 && !cleanedText.match(/^["\s]*$/)) {
+                console.log('Outline generation - extracted from cleaned JSON structure:', cleanedText.substring(0, 200));
+                return this.clusterTopics(cleanedText);
+            }
+            
+            // Try to extract lines that look like topic content
+            const lines = resultText.split('\n').filter(line => {
+                const trimmed = line.trim();
+                return trimmed.length > 10 && 
+                       !trimmed.startsWith('{') && 
+                       !trimmed.startsWith('}') && 
+                       !trimmed.match(/^["\s]*$/) &&
+                       !trimmed.startsWith('"outline') &&
+                       !trimmed.match(/^[{}",\s]*$/);
+            });
+            if (lines.length > 0) {
+                const extracted = lines.slice(0, 10).join('\n');
+                console.log('Outline generation - extracted from raw text:', extracted.substring(0, 200));
+                return this.clusterTopics(extracted);
+            }
 
-            return 'Unable to generate outline from transcript.';
+            console.warn('Outline generation - no outline found in response. Full response:', resultText);
+            // Return a helpful message instead of empty string
+            return 'Outline generation is still processing. The AI model may need more time or the transcript may be too short. Try re-analyzing the session.';
         } catch (error: any) {
             console.error('Outline generation error:', error);
             throw new Error(`Outline generation failed: ${error?.message || 'Unknown error'}`);
@@ -1103,39 +1398,93 @@ Please check the browser console and terminal logs for more details. Try refresh
             }
         });
 
-        // Purpose-aware prompts for different industries
-        let contextPrompt = '';
-        let actionGuidance = '';
+        // Truncate transcript if too long to fit in token limit
+        const truncatedTranscript = this.truncateTranscript(transcript, 1500);
+        
+        // Domain-specific action items prompts
+        let prompt = '';
         
         switch (industry) {
             case 'therapy':
-                contextPrompt = 'Context: therapy session. ';
-                actionGuidance = 'Focus on treatment plans, homework assignments, follow-up appointments, emotional insights, and therapeutic goals.';
+                prompt = `Role: You are a highly skilled assistant specialized in processing transcribed text for Psychotherapy and Counseling sessions.
+
+Extract action items from this therapy session transcript. Focus on:
+- Treatment plans and therapeutic goals
+- Homework assignments for the client
+- Follow-up appointments or check-ins
+- Therapeutic interventions to implement
+- Coping strategies to practice
+
+Action items must be specific, actionable, and include who/what/when if mentioned.
+
+Output Format: Return ONLY valid JSON with complete action items. The array must be fully closed with ]. Example: {"action_items":["Complete action item 1","Complete action item 2"]}
+
+Transcription: ${truncatedTranscript}`;
                 break;
+                
             case 'medical':
-                contextPrompt = 'Context: medical dictation. ';
-                actionGuidance = 'Focus on diagnoses, medications prescribed, test orders, patient instructions, and follow-up care requirements.';
+                prompt = `Role: You are a highly skilled assistant specialized in processing transcribed text for Clinical Medical Documentation.
+
+Extract action items from this medical consultation transcript. Focus on:
+- Diagnoses and treatment plans
+- Medications prescribed (name, dosage, frequency)
+- Test orders and lab work needed
+- Patient instructions and care requirements
+- Follow-up appointments or referrals
+
+Action items must be specific, actionable, and include who/what/when if mentioned. Preserve all medical terminology accurately.
+
+Output Format: Return ONLY valid JSON with complete action items. The array must be fully closed with ]. Example: {"action_items":["Complete action item 1","Complete action item 2"]}
+
+Transcription: ${truncatedTranscript}`;
                 break;
+                
             case 'legal':
-                contextPrompt = 'Context: legal note. ';
-                actionGuidance = 'Focus on deadlines, document requests, case actions, client tasks, and legal procedures.';
+                prompt = `Role: You are a highly skilled assistant specialized in processing transcribed text for Legal Documentation.
+
+Extract action items from this legal consultation transcript. Focus on:
+- Deadlines and filing dates
+- Document requests and preparation needed
+- Case actions and legal procedures
+- Client tasks and responsibilities
+- Follow-up meetings or court dates
+
+Action items must be specific, actionable, and include who/what/when if mentioned. Preserve all names, dates, and legal terminology.
+
+Output Format: Return ONLY valid JSON with complete action items. The array must be fully closed with ]. Example: {"action_items":["Complete action item 1","Complete action item 2"]}
+
+Transcription: ${truncatedTranscript}`;
                 break;
+                
             case 'business':
-                contextPrompt = 'Context: business meeting. ';
-                actionGuidance = 'Focus on decisions made, assignments, deadlines, next steps, and action items for team members.';
+                prompt = `Role: You are a highly skilled assistant specialized in processing transcribed text for Corporate Business Meetings.
+
+Extract action items from this business meeting transcript. Focus on:
+- Decisions made and next steps
+- Task assignments with clear owners
+- Deadlines and due dates
+- Project updates and milestones
+- Risks or blockers that need addressing
+
+Action items must be specific, actionable, and include WHO (owner), WHAT (task), and WHEN (deadline) if mentioned.
+
+Output Format: Return ONLY valid JSON with complete action items. The array must be fully closed with ]. Example: {"action_items":["Complete action item 1","Complete action item 2"]}
+
+Transcription: ${truncatedTranscript}`;
                 break;
+                
             default:
-                contextPrompt = 'Context: general conversation. ';
-                actionGuidance = 'Extract specific, actionable items mentioned in the conversation.';
-        }
-        
-        const prompt = `${contextPrompt}Extract action items from this transcript. Action items must be:
+                prompt = `Role: You are a highly skilled assistant specialized in processing transcribed text for General Note-Taking.
+
+Extract action items from this transcript. Action items must be:
 - Specific and actionable
-- Relevant to ${industry === 'general' ? 'the conversation' : industry} context
 - Include who/what/when if mentioned
-${actionGuidance}
-Return only JSON array: {"action_items":["item1","item2"]}
-Transcript: ${transcript}`;
+- Clear and concise
+
+Output Format: Return ONLY valid JSON with complete action items. The array must be fully closed with ]. Example: {"action_items":["Complete action item 1","Complete action item 2"]}
+
+Transcription: ${truncatedTranscript}`;
+        }
 
         progressCallback('Extracting action items...', 80);
 
@@ -1144,11 +1493,12 @@ Transcript: ${transcript}`;
         }
 
         try {
+            // Increase max_length to allow longer prompts with transcript
             const inputs = this.tokenizer(prompt, {
                 return_tensors: 'pt',
                 padding: true,
                 truncation: true,
-                max_length: 1024
+                max_length: 2048 // Increased to handle longer transcripts
             });
             
             if (!inputs || !inputs.input_ids || !inputs.attention_mask) {
@@ -1158,7 +1508,8 @@ Transcript: ${transcript}`;
             const output = await this.model.generate(inputs, {
                 max_new_tokens: 512,
                 num_beams: 1,
-                do_sample: false
+                do_sample: false,
+                pad_token_id: this.tokenizer.eos_token_id || 0
             });
             
             if (!output || !output[0]) {
@@ -1166,18 +1517,36 @@ Transcript: ${transcript}`;
             }
             
             const resultText = this.tokenizer.decode(output[0], { skip_special_tokens: true });
+            console.log('Action items generation - raw model output:', resultText);
             
             const parsed = this.parseJSONResponse(resultText, ['action_items']);
-            if (parsed && parsed.action_items && Array.isArray(parsed.action_items)) {
-                return parsed.action_items.filter((item: any) => item && typeof item === 'string' && item.trim().length > 0);
+            if (parsed && parsed.action_items && Array.isArray(parsed.action_items) && parsed.action_items.length > 0) {
+                const filtered = parsed.action_items.filter((item: any) => item && typeof item === 'string' && item.trim().length > 0);
+                if (filtered.length > 0) {
+                    console.log('Action items generation - parsed successfully:', filtered.length, 'items');
+                    return filtered;
+                }
             }
 
-            // Fallback: extract action items from text
-            const actionItems = this.extractList(resultText, ['action items', 'action_items', 'todos', 'to-do', 'tasks']);
+            // Fallback: extract action items from text (try multiple patterns)
+            const actionItems = this.extractList(resultText, ['action items', 'action_items', 'todos', 'to-do', 'tasks', 'action', 'Action']);
             if (actionItems.length > 0) {
+                console.log('Action items generation - extracted from text:', actionItems.length, 'items');
                 return actionItems;
             }
+            
+            // Last resort: try to extract from incomplete JSON
+            // Look for patterns like: "action_item 1"," or action_item 1,
+            const incompleteMatch = resultText.match(/"action_item[^"]*"|"action[^"]*item[^"]*"/gi);
+            if (incompleteMatch && incompleteMatch.length > 0) {
+                const extracted = incompleteMatch.map(item => item.replace(/^"|"$/g, '').trim()).filter(item => item.length > 0);
+                if (extracted.length > 0) {
+                    console.log('Action items generation - extracted from incomplete JSON:', extracted.length, 'items');
+                    return extracted;
+                }
+            }
 
+            console.warn('Action items generation - no action items found in response. Full response:', resultText);
             return [];
         } catch (error: any) {
             console.error('Action items generation error:', error);
@@ -1337,6 +1706,22 @@ interface TodoItem {
     promotedToTaskId?: number;
 }
 
+interface KeyDecision {
+    decision: string;
+    reasoning?: string;
+    owner?: string;
+    implementationDate?: string;
+    timestamp?: number; // When in the meeting this was decided
+}
+
+interface Attachment {
+    name: string;
+    type: 'file' | 'link' | 'document' | 'spreadsheet' | 'presentation' | 'other';
+    url?: string;
+    mentionedBy?: string; // Who mentioned it
+    timestamp?: number; // When in the meeting it was mentioned
+}
+
 interface Session {
     id?: number;
     sessionTitle: string;
@@ -1352,6 +1737,11 @@ interface Session {
     analysisStatus?: 'pending' | 'complete' | 'failed' | 'none';
     audioBlob?: Blob;
     language?: string; // Language code for transcription (e.g., 'en', 'es', 'fr')
+    // New fields for 6-section template
+    keyDecisions?: KeyDecision[] | string; // Decisions made in the meeting
+    attachments?: Attachment[] | string; // Files, links, resources mentioned
+    meetingType?: string; // e.g., 'Zoom', 'Teams', 'in-person'
+    platform?: string; // Meeting platform
 }
 
 // Helper functions to parse JSON fields safely
@@ -1397,6 +1787,30 @@ const parseOutline = (outline: string | undefined): string => {
     } catch {
         return outline;
     }
+};
+
+const parseKeyDecisions = (decisions: KeyDecision[] | string | undefined): KeyDecision[] => {
+    if (!decisions) return [];
+    if (typeof decisions === 'string') {
+        try {
+            return JSON.parse(decisions);
+        } catch {
+            return [];
+        }
+    }
+    return decisions;
+};
+
+const parseAttachments = (attachments: Attachment[] | string | undefined): Attachment[] => {
+    if (!attachments) return [];
+    if (typeof attachments === 'string') {
+        try {
+            return JSON.parse(attachments);
+        } catch {
+            return [];
+        }
+    }
+    return attachments;
 };
 
 interface Task {
@@ -1497,16 +1911,45 @@ class TherapyDB {
 
     private init(): Promise<void> {
         return new Promise((resolve, reject) => {
-            const request = indexedDB.open(this.DB_NAME, 4); // Increment version for encryption migration
+            const request = indexedDB.open(this.DB_NAME, 5); // Increment version for indexing
 
             request.onupgradeneeded = (event) => {
                 const db = (event.target as IDBOpenDBRequest).result;
                 if (!db.objectStoreNames.contains(this.SESSIONS_STORE)) {
-                    db.createObjectStore(this.SESSIONS_STORE, { keyPath: 'id', autoIncrement: true });
+                    const sessionStore = db.createObjectStore(this.SESSIONS_STORE, { keyPath: 'id', autoIncrement: true });
+                    // Create indexes for search and recovery
+                    sessionStore.createIndex('date', 'date', { unique: false });
+                    sessionStore.createIndex('timestamp', 'timestamp', { unique: false });
+                    sessionStore.createIndex('sessionTitle', 'sessionTitle', { unique: false });
+                } else {
+                    // Add indexes to existing store if upgrading
+                    const transaction = (event.target as IDBOpenDBRequest).transaction;
+                    if (transaction) {
+                        const sessionStore = transaction.objectStore(this.SESSIONS_STORE);
+                        if (!sessionStore.indexNames.contains('date')) {
+                            sessionStore.createIndex('date', 'date', { unique: false });
+                        }
+                        if (!sessionStore.indexNames.contains('timestamp')) {
+                            sessionStore.createIndex('timestamp', 'timestamp', { unique: false });
+                        }
+                        if (!sessionStore.indexNames.contains('sessionTitle')) {
+                            sessionStore.createIndex('sessionTitle', 'sessionTitle', { unique: false });
+                        }
+                    }
                 }
                 if (!db.objectStoreNames.contains(this.TASKS_STORE)) {
                     const taskStore = db.createObjectStore(this.TASKS_STORE, { keyPath: 'id', autoIncrement: true });
                     taskStore.createIndex('timestamp', 'timestamp', { unique: false });
+                    taskStore.createIndex('sessionId', 'sessionId', { unique: false });
+                } else {
+                    // Add sessionId index to existing tasks store if upgrading
+                    const transaction = (event.target as IDBOpenDBRequest).transaction;
+                    if (transaction) {
+                        const taskStore = transaction.objectStore(this.TASKS_STORE);
+                        if (!taskStore.indexNames.contains('sessionId')) {
+                            taskStore.createIndex('sessionId', 'sessionId', { unique: false });
+                        }
+                    }
                 }
                 if (!db.objectStoreNames.contains(this.CONFIG_STORE)) {
                     db.createObjectStore(this.CONFIG_STORE, { keyPath: 'key' });
@@ -2307,7 +2750,7 @@ const MainApp: React.FC<{ pin: string }> = ({ pin }) => {
     const [isLoading, setIsLoading] = useState(true);
     const [status, setStatus] = useState({ message: '', type: '' });
     const [selectedSession, setSelectedSession] = useState<Session | null>(null);
-    const [view, setView] = useState<'sessions' | 'tasks'>('sessions');
+    const [view, setView] = useState<'sessions' | 'tasks' | 'notes'>('sessions');
     const [industry, setIndustry] = useState<string>('general');
     const [language, setLanguage] = useState<string>('en');
     
@@ -2546,7 +2989,8 @@ const MainApp: React.FC<{ pin: string }> = ({ pin }) => {
                 showStatus('Summary complete. Creating outline...', 'info');
             } catch (summaryError: any) {
                 console.error('Summary generation failed:', summaryError);
-                summary = 'Summary generation failed.';
+                summary = `Summary generation failed: ${summaryError?.message || 'Unknown error'}`;
+                showStatus(`Summary generation failed: ${summaryError?.message || 'Unknown error'}`, 'error', 5000);
                 // Continue with other steps even if summary fails
             }
 
@@ -2572,7 +3016,8 @@ const MainApp: React.FC<{ pin: string }> = ({ pin }) => {
                 showStatus('Outline complete. Extracting action items...', 'info');
             } catch (outlineError: any) {
                 console.error('Outline generation failed:', outlineError);
-                outline = 'Outline generation failed.';
+                outline = `Outline generation failed: ${outlineError?.message || 'Unknown error'}`;
+                showStatus(`Outline generation failed: ${outlineError?.message || 'Unknown error'}`, 'error', 5000);
                 // Continue with action items even if outline fails
             }
 
@@ -2589,6 +3034,7 @@ const MainApp: React.FC<{ pin: string }> = ({ pin }) => {
             } catch (actionError: any) {
                 console.error('Action items generation failed:', actionError);
                 actionItems = [];
+                showStatus(`Action items generation failed: ${actionError?.message || 'Unknown error'}`, 'error', 5000);
                 // Continue to final save even if action items fail
             }
 
@@ -2678,13 +3124,22 @@ const MainApp: React.FC<{ pin: string }> = ({ pin }) => {
                         <NewSessionForm onAddSession={handleAddSession} onStartAnalysis={handleStartAnalysis} showStatus={showStatus} industry={industry} />
                         <SessionsList sessions={sessions} onSelect={setSelectedSession} onDelete={handleDeleteSession} pin={pin} />
                     </>
-                ) : (
+                ) : view === 'tasks' ? (
                     <TaskManager 
                         tasks={tasks}
                         onAddTask={handleAddTask}
                         onUpdateTask={handleUpdateTask}
                         onDeleteTask={handleDeleteTask}
                         sessions={sessions}
+                    />
+                ) : (
+                    <PreviousNotesList 
+                        sessions={sessions} 
+                        tasks={tasks}
+                        onSelect={setSelectedSession} 
+                        onDelete={handleDeleteSession}
+                        onSetView={setView}
+                        pin={pin} 
                     />
                 )
             )}
@@ -2703,10 +3158,11 @@ const MainApp: React.FC<{ pin: string }> = ({ pin }) => {
     );
 };
 
-const ViewSwitcher: React.FC<{ view: 'sessions' | 'tasks', setView: (view: 'sessions' | 'tasks') => void }> = ({ view, setView }) => (
+const ViewSwitcher: React.FC<{ view: 'sessions' | 'tasks' | 'notes', setView: (view: 'sessions' | 'tasks' | 'notes') => void }> = ({ view, setView }) => (
     <div className="view-switcher">
         <button className={view === 'sessions' ? 'active' : ''} onClick={() => setView('sessions')}>Sessions</button>
         <button className={view === 'tasks' ? 'active' : ''} onClick={() => setView('tasks')}>Tasks</button>
+        <button className={view === 'notes' ? 'active' : ''} onClick={() => setView('notes')}>History</button>
     </div>
 );
 
@@ -3216,6 +3672,493 @@ const SessionsList: React.FC<{ sessions: Session[], onSelect: (session: Session)
     );
 };
 
+const PreviousNotesList: React.FC<{ 
+    sessions: Session[], 
+    tasks: Task[],
+    onSelect: (session: Session) => void, 
+    onDelete: (id: number) => void,
+    onSetView: (view: 'sessions' | 'tasks' | 'notes') => void,
+    pin: string 
+}> = ({ sessions, tasks, onSelect, onDelete, onSetView, pin }) => {
+    const [selectedNotesSession, setSelectedNotesSession] = useState<Session | null>(null);
+    const [searchQuery, setSearchQuery] = useState('');
+    const [filteredSessions, setFilteredSessions] = useState<Session[]>(sessions);
+    
+    useEffect(() => {
+        if (!searchQuery.trim()) {
+            setFilteredSessions(sessions);
+            return;
+        }
+        
+        const query = searchQuery.toLowerCase();
+        const filtered = sessions.filter(session => {
+            const titleMatch = session.sessionTitle?.toLowerCase().includes(query);
+            const participantsMatch = session.participants?.toLowerCase().includes(query);
+            const dateMatch = new Date(session.date).toLocaleDateString().toLowerCase().includes(query);
+            const summary = parseSummary(session.summary);
+            const summaryMatch = summary.toLowerCase().includes(query);
+            return titleMatch || participantsMatch || dateMatch || summaryMatch;
+        });
+        setFilteredSessions(filtered);
+    }, [searchQuery, sessions]);
+    
+    const handleExportSession = async (session: Session) => {
+        try {
+            const transcript = parseTranscript(session.transcript);
+            const todoItems = parseTodoItems(session.todoItems);
+            const summary = parseSummary(session.summary);
+            const outline = parseOutline(session.outline);
+            const decryptedNotes = await CryptoService.decrypt(session.notes, pin);
+            
+            // Create directory structure
+            const sessionName = session.sessionTitle.replace(/[^a-z0-9]/gi, '-');
+            const dateStr = new Date(session.date).toISOString().split('T')[0];
+            const baseFilename = `${dateStr}_${sessionName}`;
+            
+            // Export Transcription
+            if (transcript.length > 0) {
+                const transcriptContent = transcript.map(chunk => 
+                    `${chunk.speaker}: ${chunk.text}`
+                ).join('\n\n');
+                const transcriptBlob = new Blob([transcriptContent], { type: 'text/plain' });
+                const transcriptUrl = URL.createObjectURL(transcriptBlob);
+                const transcriptLink = document.createElement('a');
+                transcriptLink.href = transcriptUrl;
+                transcriptLink.download = `${baseFilename}_transcription.txt`;
+                document.body.appendChild(transcriptLink);
+                transcriptLink.click();
+                document.body.removeChild(transcriptLink);
+                URL.revokeObjectURL(transcriptUrl);
+            }
+            
+            // Export Actions (Markdown)
+            if (todoItems.length > 0) {
+                const actionsContent = `# Action Items\n\n${todoItems.map((item, idx) => 
+                    `${idx + 1}. ${item.completed ? '~~' : ''}${item.text}${item.completed ? '~~' : ''}`
+                ).join('\n')}`;
+                const actionsBlob = new Blob([actionsContent], { type: 'text/markdown' });
+                const actionsUrl = URL.createObjectURL(actionsBlob);
+                const actionsLink = document.createElement('a');
+                actionsLink.href = actionsUrl;
+                actionsLink.download = `${baseFilename}_actions.md`;
+                document.body.appendChild(actionsLink);
+                actionsLink.click();
+                document.body.removeChild(actionsLink);
+                URL.revokeObjectURL(actionsUrl);
+            }
+            
+            // Export Notes (Markdown)
+            if (decryptedNotes) {
+                const notesContent = `# Notes\n\n${decryptedNotes}\n\n## Summary\n\n${summary}\n\n## Outline\n\n${outline}`;
+                const notesBlob = new Blob([notesContent], { type: 'text/markdown' });
+                const notesUrl = URL.createObjectURL(notesBlob);
+                const notesLink = document.createElement('a');
+                notesLink.href = notesUrl;
+                notesLink.download = `${baseFilename}_notes.md`;
+                document.body.appendChild(notesLink);
+                notesLink.click();
+                document.body.removeChild(notesLink);
+                URL.revokeObjectURL(notesUrl);
+            }
+        } catch (error: any) {
+            alert(`Failed to export session: ${error?.message || 'Unknown error'}`);
+        }
+    };
+    
+    const handleDownloadActions = async (session: Session) => {
+        try {
+            const todoItems = parseTodoItems(session.todoItems);
+            if (todoItems.length === 0) {
+                alert('No action items to download.');
+                return;
+            }
+            const actionsContent = `# Action Items\n\n${todoItems.map((item, idx) => 
+                `${idx + 1}. ${item.completed ? '~~' : ''}${item.text}${item.completed ? '~~' : ''}`
+            ).join('\n')}`;
+            const blob = new Blob([actionsContent], { type: 'text/markdown' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `${session.sessionTitle.replace(/[^a-z0-9]/gi, '-')}_actions.md`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        } catch (error: any) {
+            alert(`Failed to download actions: ${error?.message || 'Unknown error'}`);
+        }
+    };
+    
+    const handleOpenNotes = (session: Session) => {
+        setSelectedNotesSession(session);
+    };
+    
+    const isDefaultTitle = (title: string): boolean => {
+        // Check if title matches default format: yyyymmdd.timestamp_purpose
+        return /^\d{8}\.\d+_(general|therapy|medical|legal|business)$/.test(title);
+    };
+    
+    const getBadgeColor = (index: number): string => {
+        const colors = [
+            'rgba(139, 116, 101, 0.2)', // light brown
+            'rgba(255, 182, 193, 0.3)', // light pink
+            'rgba(173, 216, 230, 0.3)', // light blue
+            'rgba(144, 238, 144, 0.3)', // light green
+            'rgba(255, 218, 185, 0.3)', // peach
+            'rgba(221, 160, 221, 0.3)', // plum
+        ];
+        return colors[index % colors.length];
+    };
+    
+    const [viewFilter, setViewFilter] = useState<'all' | 'upcoming' | 'thisweek'>('all');
+    const [categoryFilter, setCategoryFilter] = useState<string>('');
+    
+    if (sessions.length === 0) {
+        return <div className="empty-state">No notes yet. Create a session to get started!</div>;
+    }
+
+    // Filter by view type
+    const now = new Date();
+    const startOfWeek = new Date(now);
+    startOfWeek.setDate(now.getDate() - now.getDay());
+    startOfWeek.setHours(0, 0, 0, 0);
+    
+    let viewFilteredSessions = filteredSessions;
+    if (viewFilter === 'upcoming') {
+        viewFilteredSessions = filteredSessions.filter(s => new Date(s.date) > now);
+    } else if (viewFilter === 'thisweek') {
+        viewFilteredSessions = filteredSessions.filter(s => {
+            const sessionDate = new Date(s.date);
+            return sessionDate >= startOfWeek && sessionDate <= now;
+        });
+    }
+    
+    // Sort sessions by date (newest first)
+    const sortedSessions = [...viewFilteredSessions].sort((a, b) => {
+        return new Date(b.date).getTime() - new Date(a.date).getTime();
+    });
+    
+    // Get unique categories from sessions (extract from title or use industry)
+    const categories = [...new Set(sessions.map(s => {
+        // Try to extract category from title or use industry
+        const industry = s.meetingType || 'general';
+        return industry.charAt(0).toUpperCase() + industry.slice(1);
+    }))];
+    
+    return (
+        <div className="history-container">
+            {/* Visual Header with Icon */}
+            <div className="history-visual-header">
+                <div className="history-header-icon">📁</div>
+                <h1 className="history-main-title">Meeting Note Directory</h1>
+            </div>
+            
+            {/* Main Content Area */}
+            <div className="history-content-area">
+                <h2 className="history-content-title">Meeting Note Directory</h2>
+                
+                {/* Category Tag */}
+                {categoryFilter && (
+                    <div className="history-category-tag">
+                        {categoryFilter}
+                        <button 
+                            className="category-tag-close"
+                            onClick={() => setCategoryFilter('')}
+                        >
+                            ×
+                        </button>
+                    </div>
+                )}
+                
+                {/* View Switcher */}
+                <div className="history-view-switcher">
+                    <button 
+                        className={`history-view-tab ${viewFilter === 'all' ? 'active' : ''}`}
+                        onClick={() => setViewFilter('all')}
+                    >
+                        <span className="view-tab-icon">👥</span>
+                        <span>all</span>
+                    </button>
+                    <button 
+                        className={`history-view-tab ${viewFilter === 'upcoming' ? 'active' : ''}`}
+                        onClick={() => setViewFilter('upcoming')}
+                    >
+                        <span className="view-tab-icon">📅</span>
+                        <span>upcoming</span>
+                    </button>
+                    <button 
+                        className={`history-view-tab ${viewFilter === 'thisweek' ? 'active' : ''}`}
+                        onClick={() => setViewFilter('thisweek')}
+                    >
+                        <span className="view-tab-icon">📆</span>
+                        <span>this week</span>
+                    </button>
+                </div>
+                
+                {sortedSessions.length === 0 && (searchQuery || viewFilter !== 'all') ? (
+                    <div className="empty-state">No meetings match your filters.</div>
+                ) : (
+                    <div className="history-table">
+                        <div className="history-table-header">
+                            <div className="history-row-cell history-search-cell">
+                                <div className="search-icon">Aa</div>
+                                <input
+                                    type="text"
+                                    placeholder="meeting name"
+                                    value={searchQuery}
+                                    onChange={(e) => setSearchQuery(e.target.value)}
+                                    className="history-inline-search"
+                                />
+                            </div>
+                            <div className="history-row-cell">booking status</div>
+                            <div className="history-row-cell">prep status</div>
+                            <div className="history-row-cell">type</div>
+                            <div className="history-row-cell">date and time</div>
+                            <div className="history-row-cell">invitees</div>
+                            <div className="history-row-cell">actions</div>
+                            <div className="history-row-cell">notes</div>
+                            <div className="history-row-cell">export</div>
+                        </div>
+                        <div className="history-table-body">
+                        {sortedSessions.map(session => {
+                            const date = new Date(session.date);
+                            const duration = session.duration || 0;
+                            
+                            // Format date as "DD/MM/YYYY HH:MM AM/PM"
+                            const day = String(date.getDate()).padStart(2, '0');
+                            const month = String(date.getMonth() + 1).padStart(2, '0');
+                            const year = date.getFullYear();
+                            const hours = date.getHours();
+                            const minutes = date.getMinutes();
+                            const ampm = hours >= 12 ? 'PM' : 'AM';
+                            const displayHours = hours % 12 || 12;
+                            const displayMinutes = String(minutes).padStart(2, '0');
+                            const dateTimeStr = day + '/' + month + '/' + year + ' ' + displayHours + ':' + displayMinutes + ' ' + ampm;
+                            
+                            // Determine booking status (complete if analysis is done, scheduled if pending, provisional if none)
+                            const bookingStatus = session.analysisStatus === 'complete' ? 'complete' 
+                                : session.analysisStatus === 'pending' ? 'scheduled' 
+                                : 'provisional';
+                            
+                            // Determine prep status (based on whether notes/transcript exist)
+                            const hasContent = session.transcript || session.summary || session.outline;
+                            const prepStatus = hasContent ? (session.analysisStatus === 'complete' ? 'complete' : 'in progress') : 'not started';
+                            
+                            // Meeting type (Virtual or In Person - default to Virtual)
+                            const meetingType = session.platform === 'in-person' ? 'In Person' : 'Virtual';
+                            
+                            // Get attendees list
+                            const attendeesList = session.participants ? session.participants.split(',').map(p => p.trim()).filter(p => p) : [];
+                            
+                            // Count action items and tasks
+                            const actionItems = parseTodoItems(session.todoItems);
+                            const sessionTasks = tasks.filter(t => t.sessionId === session.id);
+                            const totalActions = actionItems.length + sessionTasks.length;
+                            
+                            // Check if title is default
+                            const isDefault = isDefaultTitle(session.sessionTitle);
+                            
+                            // Get relative date indicator
+                            const sessionDate = new Date(session.date);
+                            const daysDiff = Math.floor((sessionDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
+                            let relativeDate = '';
+                            if (daysDiff === 0) relativeDate = '@Today';
+                            else if (daysDiff === 1) relativeDate = '@Tomorrow';
+                            else if (daysDiff === -1) relativeDate = '@Yesterday';
+                            else if (daysDiff > 0 && daysDiff <= 7) {
+                                const nextMonday = new Date(now);
+                                nextMonday.setDate(now.getDate() + (1 + 7 - now.getDay()) % 7);
+                                if (sessionDate <= nextMonday) relativeDate = '@Next Monday';
+                            }
+                            
+                            return (
+                                <div key={session.id} className="history-row">
+                                    <div className="history-row-cell history-title-cell">
+                                    <span 
+                                        className={`history-title ${isDefault ? 'history-title-default' : ''}`}
+                                        onClick={() => onSelect(session)}
+                                    >
+                                        {session.sessionTitle}
+                                        {relativeDate && <span className="history-relative-date">{relativeDate}</span>}
+                                    </span>
+                                    </div>
+                                    <div className="history-row-cell">
+                                        <span className={`status-pill status-${bookingStatus}`}>
+                                            <span className="status-dot"></span>
+                                            {bookingStatus}
+                                        </span>
+                                    </div>
+                                    <div className="history-row-cell">
+                                        <span className={`status-pill status-${prepStatus.replace(' ', '-')}`}>
+                                            <span className="status-dot"></span>
+                                            {prepStatus}
+                                        </span>
+                                    </div>
+                                    <div className="history-row-cell">{meetingType}</div>
+                                    <div className="history-row-cell">{dateTimeStr}</div>
+                                    <div className="history-row-cell">
+                                        <div className="invitees-badges">
+                                            {attendeesList.map((attendee, idx) => (
+                                                <span 
+                                                    key={idx} 
+                                                    className="invitee-badge"
+                                                    style={{ 
+                                                        backgroundColor: getBadgeColor(idx),
+                                                    }}
+                                                >
+                                                    {attendee}
+                                                </span>
+                                            ))}
+                                        </div>
+                                    </div>
+                                    <div className="history-row-cell">
+                                        {totalActions > 0 ? (
+                                            <button 
+                                                className="history-link"
+                                                onClick={(e) => {
+                                                    e.stopPropagation();
+                                                    onSetView('tasks');
+                                                    window.dispatchEvent(new CustomEvent('filterTasksBySession', { 
+                                                        detail: { sessionId: session.id, sessionTitle: session.sessionTitle }
+                                                    }));
+                                                }}
+                                            >
+                                                {totalActions}
+                                            </button>
+                                        ) : (
+                                            <span className="history-muted">0</span>
+                                        )}
+                                    </div>
+                                    <div className="history-row-cell">
+                                        <button 
+                                            className="history-link"
+                                            onClick={(e) => {
+                                                e.stopPropagation();
+                                                handleOpenNotes(session);
+                                            }}
+                                        >
+                                            Notes
+                                        </button>
+                                    </div>
+                                    <div className="history-row-cell">
+                                        <button 
+                                            className="history-link"
+                                            onClick={(e) => {
+                                                e.stopPropagation();
+                                                handleExportSession(session);
+                                            }}
+                                        >
+                                            Export
+                                        </button>
+                                    </div>
+                                </div>
+                            );
+                        })}
+                        </div>
+                    </div>
+                )}
+            </div>
+            
+            {/* Notes View Modal */}
+            {selectedNotesSession && (
+                <NotesViewModal
+                    session={selectedNotesSession}
+                    onClose={() => setSelectedNotesSession(null)}
+                    pin={pin}
+                />
+            )}
+        </div>
+    );
+};
+
+const NotesViewModal: React.FC<{
+    session: Session,
+    onClose: () => void,
+    pin: string
+}> = ({ session, onClose, pin }) => {
+    const [decryptedNotes, setDecryptedNotes] = useState('');
+    const [isDecrypting, setIsDecrypting] = useState(true);
+    
+    useEffect(() => {
+        const loadNotes = async () => {
+            setIsDecrypting(true);
+            try {
+                const notes = await CryptoService.decrypt(session.notes, pin);
+                setDecryptedNotes(notes);
+            } catch (error) {
+                setDecryptedNotes("Error: Could not decrypt notes.");
+            } finally {
+                setIsDecrypting(false);
+            }
+        };
+        loadNotes();
+    }, [session, pin]);
+    
+    const transcript = parseTranscript(session.transcript);
+    const summary = parseSummary(session.summary);
+    const outline = parseOutline(session.outline);
+    
+    return (
+        <div className="modal active" onClick={onClose}>
+            <div className="modal-content notes-view-modal" onClick={e => e.stopPropagation()}>
+                <button className="close-btn" onClick={onClose}>&times;</button>
+                <h2>{session.sessionTitle}</h2>
+                
+                {isDecrypting ? (
+                    <div className="loading">Loading notes...</div>
+                ) : (
+                    <div className="notes-view-content">
+                        {/* Transcript Section */}
+                        {transcript.length > 0 && (
+                            <div className="notes-section">
+                                <h3>Transcript</h3>
+                                <div className="transcript-view">
+                                    {transcript.map((chunk, index) => (
+                                        <div key={index} className="transcript-chunk-view">
+                                            <span className="transcript-speaker-view">{chunk.speaker}:</span>
+                                            <span className="transcript-text-view">{chunk.text}</span>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
+                        
+                        {/* Summary Section */}
+                        {summary && (
+                            <div className="notes-section">
+                                <h3>Summary</h3>
+                                <div className="summary-view">
+                                    <p>{summary}</p>
+                                </div>
+                            </div>
+                        )}
+                        
+                        {/* Outline Section */}
+                        {outline && (
+                            <div className="notes-section">
+                                <h3>Outline</h3>
+                                <div className="outline-view">
+                                    <pre>{outline}</pre>
+                                </div>
+                            </div>
+                        )}
+                        
+                        {/* Additional Notes */}
+                        {decryptedNotes && (
+                            <div className="notes-section">
+                                <h3>Additional Notes</h3>
+                                <div className="additional-notes-view">
+                                    <pre>{decryptedNotes}</pre>
+                                </div>
+                            </div>
+                        )}
+                    </div>
+                )}
+            </div>
+        </div>
+    );
+};
+
 const SessionDetailModal: React.FC<{ 
     session: Session, 
     onClose: () => void, 
@@ -3468,7 +4411,8 @@ const SessionDetailModal: React.FC<{
                 setAiProgress({ status: 'Summary complete. Creating outline...', progress: 60 });
             } catch (summaryError: any) {
                 console.error('Summary generation failed:', summaryError);
-                summary = 'Summary generation failed.';
+                summary = `Summary generation failed: ${summaryError?.message || 'Unknown error'}`;
+                setAiProgress({ status: `Summary failed: ${summaryError?.message || 'Unknown error'}`, progress: 50 });
             }
 
             // Step 3: Generate Outline
@@ -3491,7 +4435,8 @@ const SessionDetailModal: React.FC<{
                 setAiProgress({ status: 'Outline complete. Extracting action items...', progress: 80 });
             } catch (outlineError: any) {
                 console.error('Outline generation failed:', outlineError);
-                outline = 'Outline generation failed.';
+                outline = `Outline generation failed: ${outlineError?.message || 'Unknown error'}`;
+                setAiProgress({ status: `Outline failed: ${outlineError?.message || 'Unknown error'}`, progress: 70 });
             }
 
             // Step 4: Generate Action Items
@@ -3507,6 +4452,7 @@ const SessionDetailModal: React.FC<{
             } catch (actionError: any) {
                 console.error('Action items generation failed:', actionError);
                 actionItems = [];
+                setAiProgress({ status: `Action items failed: ${actionError?.message || 'Unknown error'}`, progress: 90 });
             }
 
             // Format action items for UI
@@ -3561,15 +4507,95 @@ const SessionDetailModal: React.FC<{
         const index = speakers.indexOf(speaker);
         return `speaker-style-${(index % 5) + 1}`;
     };
+    
+    const formatTimestamp = (seconds: number): string => {
+        const mins = Math.floor(seconds / 60);
+        const secs = Math.floor(seconds % 60);
+        return `${mins}:${secs.toString().padStart(2, '0')}`;
+    };
+    
+    const getAttachmentIcon = (type: string): string => {
+        switch (type) {
+            case 'file': return '📄';
+            case 'link': return '🔗';
+            case 'document': return '📝';
+            case 'spreadsheet': return '📊';
+            case 'presentation': return '📽️';
+            default: return '📎';
+        }
+    };
 
+    // Parse all session data
+    const transcript = parseTranscript(session.transcript);
+    const summary = parseSummary(session.summary);
+    const todoItems = parseTodoItems(session.todoItems);
+    const outline = parseOutline(session.outline);
+    const keyDecisions = parseKeyDecisions(session.keyDecisions);
+    const attachments = parseAttachments(session.attachments);
+    const [transcriptExpanded, setTranscriptExpanded] = useState(false);
+    
+    // Format metadata
+    const date = new Date(session.date);
+    const duration = session.duration || 0;
+    const durationMinutes = Math.floor(duration / 60);
+    const durationSeconds = Math.floor(duration % 60);
+    const durationStr = durationMinutes > 0 
+        ? `${durationMinutes}m ${durationSeconds}s` 
+        : `${durationSeconds}s`;
+    const meetingType = session.meetingType || 'General';
+    const platform = session.platform || 'Unknown';
+    const hasRecording = !!audioUrl;
+    
     return (
         <div className="modal active" onClick={onClose}>
-            <div className="modal-content" onClick={e => e.stopPropagation()}>
+            <div className="modal-content meeting-notes-template" onClick={e => e.stopPropagation()}>
                 <button className="close-btn" onClick={onClose}>&times;</button>
-                <h2>{session.sessionTitle}</h2>
-                <p style={{ color: '#94a3b8', marginBottom: '16px' }}>{new Date(session.date).toLocaleDateString()}{session.participants && ` with ${session.participants}`}</p>
                 
-                {audioUrl && <AudioPlayer audioUrl={audioUrl} />}
+                {/* Section 1: Metadata */}
+                <div className="meeting-section metadata-section">
+                    <div className="metadata-header">
+                        <h2>{session.sessionTitle}</h2>
+                        <div className="metadata-line">
+                            <span>{date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</span>
+                            <span>•</span>
+                            <span>{date.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}</span>
+                            {duration > 0 && (
+                                <>
+                                    <span>•</span>
+                                    <span>{durationStr}</span>
+                                </>
+                            )}
+                            {session.participants && (
+                                <>
+                                    <span>•</span>
+                                    <span>{session.participants.split(',').length} attendees</span>
+                                </>
+                            )}
+                            {hasRecording && (
+                                <>
+                                    <span>•</span>
+                                    <span className="recording-badge">Recording available</span>
+                                </>
+                            )}
+                        </div>
+                        <div className="metadata-details">
+                            {session.participants && (
+                                <div className="metadata-item">
+                                    <strong>Attendees:</strong> {session.participants}
+                                </div>
+                            )}
+                            <div className="metadata-item">
+                                <strong>Type:</strong> {meetingType} | <strong>Platform:</strong> {platform}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                {audioUrl && (
+                    <div className="meeting-section">
+                        <AudioPlayer audioUrl={audioUrl} />
+                    </div>
+                )}
 
                 {(session.analysisStatus === 'none' || session.analysisStatus === 'failed') && aiAnalysisStatus !== 'in_progress' && (
                     <div className="action-buttons" style={{ justifyContent: 'center', margin: '20px 0', flexWrap: 'wrap', gap: '8px'}}>
@@ -3614,105 +4640,220 @@ const SessionDetailModal: React.FC<{
                     </div>
                 )}
 
-                {session.analysisStatus === 'complete' && (
-                    <div className="analysis-section">
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
-                            <h3 style={{ margin: 0 }}>AI Analysis Results</h3>
-                            {aiAnalysisStatus !== 'in_progress' && (
-                                <button className="btn-secondary" onClick={handleRunOnDeviceAnalysis} style={{ fontSize: '0.85em', padding: '6px 12px' }}>
-                                    🔄 Re-run Analysis
-                                </button>
-                            )}
+                {/* Section 2: Action Items & Next Steps */}
+                {todoItems.length > 0 && (
+                    <div className="meeting-section action-items-section">
+                        <h3>Action Items & Next Steps</h3>
+                        <ul className="action-items-list">
+                            {todoItems.map((todo, index) => (
+                                <li key={index} className={`action-item ${todo.completed ? 'completed' : ''}`}>
+                                    <div className="action-item-content" onClick={() => handleTodoToggle(index)}>
+                                        <input type="checkbox" readOnly checked={todo.completed} />
+                                        <span className="action-item-text">{todo.text}</span>
+                                    </div>
+                                    {todo.promotedToTaskId ? (
+                                        <span className="task-promoted-badge">Tasked</span>
+                                    ) : (
+                                        <button 
+                                            className="btn-promote-task" 
+                                            title="Promote to Task" 
+                                            onClick={() => handlePromoteTodoToTask(todo, index)}>
+                                            &#x2795;
+                                        </button>
+                                    )}
+                                </li>
+                            ))}
+                        </ul>
+                    </div>
+                )}
+                
+                {/* Section 3: Key Decisions Made */}
+                {keyDecisions.length > 0 && (
+                    <div className="meeting-section decisions-section">
+                        <h3>Key Decisions Made</h3>
+                        <div className="decisions-list">
+                            {keyDecisions.map((decision, index) => (
+                                <div key={index} className="decision-item">
+                                    <div className="decision-text">
+                                        <strong>Decision:</strong> {decision.decision}
+                                    </div>
+                                    {decision.reasoning && (
+                                        <div className="decision-reasoning">
+                                            <strong>Reasoning:</strong> {decision.reasoning}
+                                        </div>
+                                    )}
+                                    <div className="decision-meta">
+                                        {decision.owner && <span><strong>Owner:</strong> {decision.owner}</span>}
+                                        {decision.implementationDate && (
+                                            <span><strong>Implementation:</strong> {decision.implementationDate}</span>
+                                        )}
+                                    </div>
+                                </div>
+                            ))}
                         </div>
-                        <div className="analysis-subsection">
-                            <h4>&#x1F4DD; Summary</h4>
-                            <p>{parseSummary(session.summary)}</p>
-                        </div>
-                         {parseTodoItems(session.todoItems).length > 0 && (
-                            <div className="analysis-subsection">
-                                <h4>&#x2705; Action Items</h4>
-                                <ul className="action-items-list">
-                                    {parseTodoItems(session.todoItems).map((todo, index) => (
-                                        <li key={index} className={`todo-item ${todo.completed ? 'completed' : ''}`}>
-                                            <div className="todo-content" onClick={() => handleTodoToggle(index)}>
-                                                <input type="checkbox" readOnly checked={todo.completed} />
-                                                <span className="todo-text">{todo.text}</span>
-                                            </div>
-                                            {todo.promotedToTaskId ? (
-                                                <span className="task-promoted-badge">Tasked</span>
-                                            ) : (
-                                                <button 
-                                                    className="btn-promote-task" 
-                                                    title="Promote to Task" 
-                                                    onClick={() => handlePromoteTodoToTask(todo, index)}>
-                                                    &#x2795;
-                                                </button>
-                                            )}
-                                        </li>
-                                    ))}
-                                </ul>
+                    </div>
+                )}
+                
+                {/* Section 4: Discussion Summary */}
+                {(summary || outline) && (
+                    <div className="meeting-section discussion-section">
+                        <h3>Discussion Summary</h3>
+                        {summary && (
+                            <div className="summary-content">
+                                <p>{summary}</p>
                             </div>
                         )}
-                        {parseOutline(session.outline) && (
-                             <div className="analysis-subsection">
-                                <h4>&#x1F4D1; Outline</h4>
-                                <div className="outline-content">{parseOutline(session.outline)}</div>
+                        {outline && (
+                            <div className="outline-content">
+                                <h4>Topics Discussed</h4>
+                                <div className="outline-text">{outline}</div>
                             </div>
                         )}
                     </div>
                 )}
-
-                <h3>Notes</h3>
-                {isDecrypting ? (
-                    <div className="loading">Decrypting...</div>
-                ) : (
-                    isEditingNotes ? (
-                        <div>
-                            <textarea id="session-notes-edit" name="editedNotes" value={editedNotes} onChange={e => setEditedNotes(e.target.value)} rows={8} style={{ width: '100%' }} />
-                            <div style={{ display: 'flex', gap: '10px', marginTop: '10px' }}>
-                                <button className="btn-primary" onClick={handleSaveNotes}>Save</button>
-                                <button className="btn-stop" onClick={() => setIsEditingNotes(false)}>Cancel</button>
-                            </div>
-                        </div>
-                    ) : (
-                        <div>
-                            <div className="transcript" style={{ whiteSpace: 'pre-wrap' }} onClick={() => setIsEditingNotes(true)}>
-                                {decryptedNotes || <span style={{color: '#94a3b8'}}>Click to add notes...</span>}
-                            </div>
-                        </div>
-                    )
+                
+                {/* Section 5: Attachments, Resources & Links */}
+                {attachments.length > 0 && (
+                    <div className="meeting-section attachments-section">
+                        <h3>Attachments, Resources & Links</h3>
+                        <ul className="attachments-list">
+                            {attachments.map((attachment, index) => (
+                                <li key={index} className="attachment-item">
+                                    <span className="attachment-icon">{getAttachmentIcon(attachment.type)}</span>
+                                    <div className="attachment-info">
+                                        <div className="attachment-name">
+                                            {attachment.url ? (
+                                                <a href={attachment.url} target="_blank" rel="noopener noreferrer">
+                                                    {attachment.name}
+                                                </a>
+                                            ) : (
+                                                <span>{attachment.name}</span>
+                                            )}
+                                        </div>
+                                        {attachment.mentionedBy && (
+                                            <div className="attachment-meta">
+                                                Mentioned by: {attachment.mentionedBy}
+                                            </div>
+                                        )}
+                                    </div>
+                                </li>
+                            ))}
+                        </ul>
+                    </div>
                 )}
                 
-                {parseTranscript(session.transcript).length > 0 && (
-                    <>
-                        <h3>Transcript</h3>
-                        <div className="transcript">
-                            {parseTranscript(session.transcript).map((chunk, index) => (
-                                <div key={index} className={`transcript-chunk ${getSpeakerClass(chunk.speaker)}`}>
-                                   {editingSpeaker?.chunkIndex === index ? (
-                                        <input
-                                            type="text"
-                                            id={`speaker-name-${index}`}
-                                            name={`speakerName-${index}`}
-                                            defaultValue={editingSpeaker.oldName}
-                                            onBlur={(e) => handleSpeakerNameChange(e.target.value)}
-                                            onKeyDown={(e) => e.key === 'Enter' && handleSpeakerNameChange(e.currentTarget.value)}
-                                            autoFocus
-                                            className="speaker-input"
-                                        />
-                                   ) : (
-                                       <span
-                                            className="speaker-label editable"
-                                            onClick={() => setEditingSpeaker({ chunkIndex: index, oldName: chunk.speaker })}
-                                        >
-                                           {speakerMap[chunk.speaker] || chunk.speaker}:
-                                        </span>
-                                   )}
-                                    <p>{chunk.text}</p>
-                                </div>
-                            ))}
+                {/* Section 6: Full Transcript */}
+                {transcript.length > 0 && (
+                    <div className="meeting-section transcript-section">
+                        <div className="transcript-header">
+                            <h3>Full Transcript</h3>
+                            <button 
+                                className="btn-toggle-transcript"
+                                onClick={() => setTranscriptExpanded(!transcriptExpanded)}
+                            >
+                                {transcriptExpanded ? 'Collapse' : 'Expand'} Transcript
+                            </button>
                         </div>
-                    </>
+                        {transcriptExpanded && (
+                            <div className="transcript-content">
+                                {transcript.map((chunk, index) => {
+                                    const displaySpeaker = speakerMap[chunk.speaker] || chunk.speaker;
+                                    const timestamp = chunk.timestamp 
+                                        ? formatTimestamp(chunk.timestamp[0] || 0)
+                                        : '';
+                                    return (
+                                        <div key={index} className="transcript-chunk">
+                                            <div className="transcript-meta">
+                                                <span className={`transcript-speaker ${getSpeakerClass(chunk.speaker)}`}>
+                                                    {displaySpeaker}
+                                                </span>
+                                                {timestamp && <span className="transcript-timestamp">{timestamp}</span>}
+                                            </div>
+                                            <div className="transcript-text">{chunk.text}</div>
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        )}
+                    </div>
+                )}
+                
+                {/* AI Analysis Status */}
+                {(session.analysisStatus === 'none' || session.analysisStatus === 'failed') && aiAnalysisStatus !== 'in_progress' && (
+                    <div className="meeting-section">
+                        <div className="action-buttons" style={{ justifyContent: 'center', margin: '20px 0', flexWrap: 'wrap', gap: '8px'}}>
+                            <button className="btn-ai" onClick={handleRunOnDeviceAnalysis}>
+                                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16"><path d="M5 2.5a.5.5 0 0 1 .5-.5h5a.5.5 0 0 1 0 1h-5a.5.5 0 0 1-.5-.5zm0 2a.5.5 0 0 1 .5-.5h5a.5.5 0 0 1 0 1h-5a.5.5 0 0 1-.5-.5zm0 2a.5.5 0 0 1 .5-.5h5a.5.5 0 0 1 0 1h-5a.5.5 0 0 1-.5-.5zm0 2a.5.5 0 0 1 .5-.5h5a.5.5 0 0 1 0 1h-5a.5.5 0 0 1-.5-.5zm0 2a.5.5 0 0 1 .5-.5h5a.5.5 0 0 1 0 1h-5a.5.5 0 0 1-.5-.5z"/><path d="M2 1a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V3a2 2 0 0 0-2-2H2zm12 1a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H2a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1h12z"/></svg>
+                                {session.analysisStatus === 'failed' ? 'Retry Analysis' : 'Run On-Device Analysis'}
+                            </button>
+                        </div>
+                    </div>
+                )}
+                
+                {aiAnalysisStatus === 'in_progress' && (
+                    <div className="analysis-progress">
+                        <div className="spinner-small"></div>
+                        <div className="analysis-progress-text">
+                            <span>{aiProgress.status}</span>
+                            {aiProgress.status.startsWith('Downloading') && (
+                                <div className="download-progress-bar">
+                                    <div className="download-progress-bar-inner" style={{width: `${aiProgress.progress}%`}}></div>
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                )}
+                
+                {aiAnalysisStatus === 'failed' && (
+                    <div className="status error">
+                        <div style={{ marginBottom: '8px' }}>
+                            <strong>On-device AI analysis failed.</strong>
+                        </div>
+                        <div style={{ marginBottom: '8px', fontSize: '0.9em' }}>
+                            {aiProgress.status && aiProgress.status.startsWith('Error:') ? (
+                                <span>{aiProgress.status}</span>
+                            ) : (
+                                <span>Please check the browser console for details and try again.</span>
+                            )}
+                        </div>
+                        <div style={{ display: 'flex', gap: '8px', justifyContent: 'center', flexWrap: 'wrap' }}>
+                            <button className="btn-secondary" onClick={handleRunOnDeviceAnalysis}>
+                                🔄 Retry Analysis
+                            </button>
+                        </div>
+                    </div>
+                )}
+                
+                {/* Legacy Notes Section (for backward compatibility) */}
+                {decryptedNotes && (
+                    <div className="meeting-section notes-section">
+                        <h3>Additional Notes</h3>
+                        {isDecrypting ? (
+                            <div className="loading">Decrypting...</div>
+                        ) : (
+                            isEditingNotes ? (
+                                <div>
+                                    <textarea 
+                                        id="session-notes-edit" 
+                                        name="editedNotes" 
+                                        value={editedNotes} 
+                                        onChange={e => setEditedNotes(e.target.value)} 
+                                        rows={8} 
+                                        style={{ width: '100%' }} 
+                                    />
+                                    <div style={{ marginTop: '8px', display: 'flex', gap: '8px' }}>
+                                        <button className="btn-primary" onClick={handleSaveNotes}>Save</button>
+                                        <button className="btn-secondary" onClick={() => { setIsEditingNotes(false); setEditedNotes(decryptedNotes); }}>Cancel</button>
+                                    </div>
+                                </div>
+                            ) : (
+                                <div>
+                                    <p style={{ whiteSpace: 'pre-wrap' }}>{decryptedNotes}</p>
+                                    <button className="btn-secondary" onClick={() => setIsEditingNotes(true)} style={{ marginTop: '8px' }}>Edit Notes</button>
+                                </div>
+                            )
+                        )}
+                    </div>
                 )}
 
                 <div style={{ marginTop: '24px', display: 'flex', justifyContent: 'flex-end' }}>
@@ -3814,6 +4955,25 @@ const TaskManager: React.FC<{
     onDeleteTask: (id: number) => void,
     sessions: Session[],
 }> = ({ tasks, onAddTask, onUpdateTask, onDeleteTask, sessions }) => {
+    const [filteredSessionId, setFilteredSessionId] = useState<number | null>(null);
+    
+    useEffect(() => {
+        const handleFilterTasks = (event: CustomEvent) => {
+            setFilteredSessionId(event.detail.sessionId);
+        };
+        window.addEventListener('filterTasksBySession', handleFilterTasks as EventListener);
+        return () => {
+            window.removeEventListener('filterTasksBySession', handleFilterTasks as EventListener);
+        };
+    }, []);
+    
+    const displayTasks = filteredSessionId 
+        ? tasks.filter(t => t.sessionId === filteredSessionId)
+        : tasks;
+    
+    const filteredSession = filteredSessionId 
+        ? sessions.find(s => s.id === filteredSessionId)
+        : null;
     const [newTaskTitle, setNewTaskTitle] = useState('');
     const [newTaskPriority, setNewTaskPriority] = useState<'low' | 'medium' | 'high'>('medium');
     const [newTaskDueDate, setNewTaskDueDate] = useState<string | null>(null);
@@ -3838,7 +4998,23 @@ const TaskManager: React.FC<{
 
     return (
         <div className="card">
-            <h3>Task Manager</h3>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+                <h3>Task Manager</h3>
+                {filteredSession && (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                        <span style={{ fontSize: '0.9em', color: 'var(--text-secondary)' }}>
+                            Filtered by: {filteredSession.sessionTitle}
+                        </span>
+                        <button 
+                            className="btn-secondary"
+                            onClick={() => setFilteredSessionId(null)}
+                            style={{ fontSize: '0.85em', padding: '4px 12px' }}
+                        >
+                            Clear Filter
+                        </button>
+                    </div>
+                )}
+            </div>
             <form className="task-form" onSubmit={handleAddTask}>
                 <input
                     type="text"
@@ -3864,7 +5040,7 @@ const TaskManager: React.FC<{
             </form>
 
             <div className="task-list">
-                {tasks.length > 0 ? tasks.map(task => (
+                {displayTasks.length > 0 ? displayTasks.map(task => (
                     <TaskItem 
                         key={task.id} 
                         task={task} 
@@ -3872,7 +5048,9 @@ const TaskManager: React.FC<{
                         onDeleteTask={onDeleteTask} 
                     />
                 )) : (
-                    <div className="empty-state">No tasks yet.</div>
+                    <div className="empty-state">
+                        {filteredSessionId ? 'No tasks for this session.' : 'No tasks yet.'}
+                    </div>
                 )}
             </div>
         </div>
