@@ -840,8 +840,8 @@ Please check the browser console and terminal logs for more details. Try refresh
         console.log(`Transcribing audio: ${duration.toFixed(2)}s, original sample rate: ${originalSampleRate}Hz, resampled to: ${targetSampleRate}Hz`);
 
         const transcriptionPromise = transcriber(audioData, {
-            chunk_length_s: 15,
-            stride_length_s: 2,
+            chunk_length_s: 30, // Increased from 15 to capture longer segments
+            stride_length_s: 5, // Increased from 2 to ensure better overlap and no gaps
             return_timestamps: true,
             language: lang !== 'en' ? lang : undefined,
             sample_rate: targetSampleRate,
@@ -1034,7 +1034,10 @@ Please check the browser console and terminal logs for more details. Try refresh
                     return parsed;
                 }
             } catch (parseError) {
-                console.warn('JSON array parse error:', parseError);
+                // Don't log errors for invalid patterns like [int]: [int]:
+                if (!cleaned.match(/\[int\]:?\s*\[int\]:?/i)) {
+                    console.warn('JSON array parse error:', parseError);
+                }
             }
         }
 
@@ -1127,19 +1130,21 @@ Transcription: ${truncatedTranscript}`;
                 break;
                 
             default:
-                prompt = `Role: You are a highly skilled assistant specialized in processing transcribed text for General Note-Taking.
+                prompt = `You are a professional note-taker. Create a clear, concise summary of this meeting transcript.
 
-Source Context: The following text is a verbatim AI transcription. It may contain filler words, repetitions, and conversational speech.
+IMPORTANT: Write actual content based on the transcript. Do NOT use placeholders like "[actual content]" or "[summary here]".
 
-Core Instructions:
-1. Clean the Text: Remove filler words, false starts, and significant repetitions while preserving the original meaning.
-2. Improve Readability: Correct obvious grammatical errors and break long sentences into clear, concise ones.
-3. Structure: Use clear paragraphs. If there is a conversation, identify speakers. Use headings if topics shift significantly.
-4. Identify Key Information: Highlight any decisions made, consensus points, and important facts or dates mentioned.
+Instructions:
+1. Read the entire transcript carefully
+2. Identify the main topics and key points discussed
+3. Write 2-3 paragraphs summarizing what was discussed
+4. Include important decisions, agreements, or conclusions
+5. Make it readable and professional
 
-Output Format: Return ONLY valid JSON: {"summary":"Your cleaned and structured summary here"}
+Return ONLY valid JSON with real content:
+{"summary":"Write the actual summary here based on what was discussed in the transcript. Make it 2-3 paragraphs that capture the essence of the meeting."}
 
-Transcription: ${truncatedTranscript}`;
+Transcript: ${truncatedTranscript}`;
         }
 
         progressCallback('Generating summary...', 60);
@@ -1174,23 +1179,53 @@ Transcription: ${truncatedTranscript}`;
             const resultText = this.tokenizer.decode(output[0], { skip_special_tokens: true });
             
             const parsed = this.parseJSONResponse(resultText, ['summary']);
-            if (parsed && parsed.summary) {
-                return parsed.summary;
+            if (parsed && parsed.summary && typeof parsed.summary === 'string') {
+                const summaryText = parsed.summary.trim();
+                // Validate it's not a placeholder
+                if (summaryText.length > 20 && 
+                    !summaryText.toLowerCase().includes('[actual') &&
+                    !summaryText.toLowerCase().includes('[summary') &&
+                    !summaryText.toLowerCase().includes('placeholder') &&
+                    !summaryText.toLowerCase().includes('your summary')) {
+                    console.log('Summary generated successfully:', summaryText.substring(0, 100));
+                    return summaryText;
+                }
             }
 
             // Fallback: extract summary from text
             const summary = this.extractSection(resultText, ['summary', 'Summary']);
-            if (summary) {
-                return summary;
+            if (summary && summary.length > 20 && 
+                !summary.toLowerCase().includes('[actual') &&
+                !summary.toLowerCase().includes('placeholder')) {
+                return summary.trim();
             }
 
-            // Last resort: use first few sentences
-            const sentences = resultText.split(/[.!?]/).filter(s => s.trim().length > 0);
+            // Try to extract any meaningful text (not JSON structure)
+            const textWithoutJson = resultText
+                .replace(/\{"summary":\s*"/gi, '')
+                .replace(/"\s*\}/g, '')
+                .replace(/^"|"$/g, '')
+                .replace(/\\n/g, '\n')
+                .trim();
+            
+            if (textWithoutJson.length > 20 && 
+                !textWithoutJson.toLowerCase().includes('[actual') &&
+                !textWithoutJson.toLowerCase().includes('placeholder')) {
+                return textWithoutJson;
+            }
+
+            // Last resort: use first few sentences if they look meaningful
+            const sentences = resultText.split(/[.!?]/).filter(s => {
+                const trimmed = s.trim();
+                return trimmed.length > 10 && 
+                       !trimmed.toLowerCase().includes('[actual') &&
+                       !trimmed.toLowerCase().includes('placeholder');
+            });
             if (sentences.length > 0) {
-                return sentences.slice(0, 2).join('. ').trim() + '.';
+                return sentences.slice(0, 3).join('. ').trim() + '.';
             }
 
-            return 'Unable to generate summary from transcript.';
+            return 'Summary generation is still processing. The transcript may be too short or unclear. Try re-analyzing the session.';
         } catch (error: any) {
             console.error('Summary generation error:', error);
             throw new Error(`Summary generation failed: ${error?.message || 'Unknown error'}`);
@@ -1219,7 +1254,9 @@ Transcription: ${truncatedTranscript}`;
         
         switch (industry) {
             case 'therapy':
-                prompt = `Analyze this therapy session transcript and create an outline organized by topics.
+                prompt = `Analyze this therapy session transcript and create an outline organized by SOAP note structure.
+
+CRITICAL: Write actual content from the transcript. Do NOT use placeholders like "[actual points]" or "[content here]".
 
 Structure the outline as:
 - Subjective: Client's self-reported feelings, concerns, experiences
@@ -1227,10 +1264,13 @@ Structure the outline as:
 - Assessment: Professional analysis and interpretation
 - Plan: Homework, goals, treatment direction
 
-For each section, list 2-3 main points discussed. Write actual content, not placeholders.
+For each section, list 2-3 specific points that were actually discussed in the session.
 
-Return ONLY this JSON format with real content:
-{"outline":"Subjective: [actual points]\\nObjective: [actual points]\\nAssessment: [actual points]\\nPlan: [actual points]"}
+Example format (but use REAL content from the transcript):
+{"outline":"Subjective: Client reported feeling anxious about work deadlines, mentioned difficulty sleeping, expressed frustration with manager\\nObjective: Client appeared tired, made minimal eye contact, spoke in a quiet tone, fidgeted with hands\\nAssessment: Anxiety appears work-related, possible sleep disturbance contributing to mood, client shows insight into stressors\\nPlan: Client will practice breathing exercises daily, schedule follow-up in 2 weeks, consider sleep hygiene strategies"}
+
+Return ONLY valid JSON with real content from the transcript:
+{"outline":"Subjective: [real content]\\nObjective: [real content]\\nAssessment: [real content]\\nPlan: [real content]"}
 
 Transcript: ${truncatedTranscript}`;
                 break;
@@ -1238,21 +1278,28 @@ Transcript: ${truncatedTranscript}`;
             case 'medical':
                 prompt = `Analyze this medical consultation transcript and create an outline organized by clinical sections.
 
+CRITICAL: Write actual content from the transcript. Do NOT use placeholders like "[actual complaint]" or "[content here]". Preserve all medical terminology accurately.
+
 Structure the outline as:
 - Chief Complaint (CC): Main reason for visit
-- History of Present Illness (HPI): Symptom details, onset, duration
+- History of Present Illness (HPI): Symptom details, onset, duration, severity
 - Assessment & Plan (A/P): Diagnosis and treatment plan by problem
 
-For each section, list 2-3 main points. Write actual medical content, not placeholders.
+For each section, list 2-3 specific points that were actually discussed. Include actual symptoms, dates, medications, and diagnoses mentioned.
 
-Return ONLY this JSON format with real content:
-{"outline":"Chief Complaint: [actual complaint]\\nHPI: [actual history]\\nAssessment & Plan: [actual assessment]"}
+Example format (but use REAL content from the transcript):
+{"outline":"Chief Complaint: Patient reports chest pain for 3 days, worse with exertion\\nHPI: Pain started Monday morning, described as pressure, radiates to left arm, associated with shortness of breath, no relief with rest\\nAssessment & Plan: Suspected angina, order EKG and cardiac enzymes, start on aspirin 81mg daily, follow up in 1 week"}
+
+Return ONLY valid JSON with real content from the transcript:
+{"outline":"Chief Complaint: [real complaint]\\nHPI: [real history]\\nAssessment & Plan: [real assessment]"}
 
 Transcript: ${truncatedTranscript}`;
                 break;
                 
             case 'legal':
                 prompt = `Analyze this legal consultation transcript and create an outline organized by legal topics.
+
+CRITICAL: Write actual content from the transcript. Do NOT use placeholders like "[actual facts]" or "[content here]". Preserve all names, dates, and legal terminology exactly as mentioned.
 
 Structure the outline as:
 - Case Background: Facts and context
@@ -1261,10 +1308,13 @@ Structure the outline as:
 - Key Dates & Deadlines: Important dates mentioned
 - Evidence Mentioned: Documents or evidence discussed
 
-For each section, list 2-3 main points. Write actual legal content, not placeholders.
+For each section, list 2-3 specific points that were actually discussed. Include actual names, dates, case details, and legal issues.
 
-Return ONLY this JSON format with real content:
-{"outline":"Case Background: [actual facts]\\nClient Statement: [actual statement]\\nLegal Issues: [actual issues]\\nKey Dates: [actual dates]\\nEvidence: [actual evidence]"}
+Example format (but use REAL content from the transcript):
+{"outline":"Case Background: Contract dispute over software development agreement signed March 2024, client claims vendor failed to deliver on time\\nClient Statement: Client states vendor missed 3 deadlines, delivered incomplete product, requests refund of $50,000\\nLegal Issues: Breach of contract, potential fraud claims, statute of limitations concerns\\nKey Dates: Contract signed March 15, 2024, first deadline was June 1, filing deadline is March 2025\\nEvidence: Signed contract, email correspondence, incomplete software deliverables"}
+
+Return ONLY valid JSON with real content from the transcript:
+{"outline":"Case Background: [real facts]\\nClient Statement: [real statement]\\nLegal Issues: [real issues]\\nKey Dates: [real dates]\\nEvidence: [real evidence]"}
 
 Transcript: ${truncatedTranscript}`;
                 break;
@@ -1272,29 +1322,51 @@ Transcript: ${truncatedTranscript}`;
             case 'business':
                 prompt = `Analyze this business meeting transcript and create an outline organized by meeting topics.
 
+CRITICAL: Write actual content from the transcript. Do NOT use placeholders like "[actual topics]" or "[content here]".
+
 Structure the outline as:
 - Agenda Items: Main topics discussed in the meeting
 - Decisions Made: Key decisions reached
 - Action Items: Tasks assigned
 - Next Steps: Follow-up actions planned
 
-For each section, list 2-3 main points. Write actual meeting content, not placeholders.
+For each section, list 2-3 specific points that were actually discussed. Include actual decisions, task assignments, deadlines, and next steps mentioned.
 
-Return ONLY this JSON format with real content:
-{"outline":"Agenda Items: [actual topics]\\nDecisions Made: [actual decisions]\\nAction Items: [actual tasks]\\nNext Steps: [actual steps]"}
+Example format (but use REAL content from the transcript):
+{"outline":"Agenda Items: Q4 budget review, product launch timeline, team hiring needs\\nDecisions Made: Approved $500K marketing budget, moved launch date to January 15, approved hiring 3 developers\\nAction Items: Sarah to finalize budget by Friday, John to schedule launch planning meeting, team to review candidate resumes\\nNext Steps: Budget presentation to board next week, launch planning meeting scheduled for Monday, interviews to begin next month"}
+
+Return ONLY valid JSON with real content from the transcript:
+{"outline":"Agenda Items: [real topics]\\nDecisions Made: [real decisions]\\nAction Items: [real tasks]\\nNext Steps: [real steps]"}
 
 Transcript: ${truncatedTranscript}`;
                 break;
                 
             default:
-                prompt = `Analyze this transcript and create an outline organized by topics.
+                prompt = `Task: Analyze the transcript below and create an outline of main topics.
 
-Group the content into 3-5 main topics. For each topic, list 2-3 main points discussed. Write actual content from the transcript, not placeholders.
+CRITICAL: You MUST write ACTUAL content from the transcript. Do NOT write generic descriptions like "Main topics discussed" or "Tasks assigned". Write the REAL topics and points that were actually mentioned.
 
-Return ONLY this JSON format with real content:
-{"outline":"Topic 1: [actual points from transcript]\\nTopic 2: [actual points from transcript]\\nTopic 3: [actual points from transcript]"}
+You MUST return ONLY this JSON format (nothing else):
+{"outline":"Topic 1: specific point 1, specific point 2\\nTopic 2: specific point 1, specific point 2\\nTopic 3: specific point 1, specific point 2"}
 
-Transcript: ${truncatedTranscript}`;
+Rules:
+- Do NOT repeat the transcript text verbatim
+- Do NOT write placeholders or generic descriptions
+- Do NOT write "Main topics discussed" or "Tasks assigned" - write the ACTUAL topics and tasks
+- Do NOT add "Output:" or any prefix
+- Write actual topics and specific points from the transcript
+- Start with { and end with }
+
+Example of GOOD output:
+{"outline":"Budget Planning: Q4 budget needs review, marketing wants $500K, finance suggests $300K\\nProduct Launch: Delayed to January, need to finalize features, marketing campaign starts next week\\nTeam Updates: Hiring 3 developers, interviews scheduled, onboarding begins in 2 weeks"}
+
+Example of BAD output (DO NOT DO THIS):
+{"outline":"Agenda Items: Main topics discussed in the meeting - Action Items: Tasks assigned"}
+
+Transcript to analyze:
+${truncatedTranscript}
+
+Now return ONLY the JSON with REAL content:`;
         }
 
         progressCallback('Creating outline...', 70);
@@ -1320,26 +1392,76 @@ Transcript: ${truncatedTranscript}`;
                 max_new_tokens: 512,
                 num_beams: 1,
                 do_sample: false,
-                pad_token_id: this.tokenizer.eos_token_id || 0
+                pad_token_id: this.tokenizer.eos_token_id || 0,
+                early_stopping: false
             });
             
             if (!output || !output[0]) {
                 throw new Error("Model did not return expected output");
             }
             
-            const resultText = this.tokenizer.decode(output[0], { skip_special_tokens: true });
+            let resultText = this.tokenizer.decode(output[0], { skip_special_tokens: true });
+            
+            // Remove common prefixes that models sometimes add
+            resultText = resultText
+                .replace(/^Output:\s*/i, '')
+                .replace(/^Response:\s*/i, '')
+                .replace(/^Here's?\s*/i, '')
+                .trim();
+            
             console.log('Outline generation - raw model output:', resultText);
             
+            // Check if model just returned transcript text instead of JSON
+            // If resultText looks like raw transcript (contains conversational phrases but no JSON structure)
+            const looksLikeTranscript = resultText.length > 50 && 
+                                       !resultText.trim().startsWith('{') && 
+                                       !resultText.trim().startsWith('[') &&
+                                       (resultText.includes('I ') || resultText.includes('you ') || resultText.includes('that ') || 
+                                        resultText.includes('I don\'t') || resultText.includes('I\'m') || resultText.includes('my ')) &&
+                                       !resultText.includes('"outline"') &&
+                                       !resultText.includes('outline:');
+            
+            if (looksLikeTranscript) {
+                console.warn('Outline generation - model returned transcript text instead of JSON:', resultText.substring(0, 100));
+                return 'Outline generation failed: The AI model returned transcript text instead of an outline. Please try re-analyzing the session.';
+            }
+            
             const parsed = this.parseJSONResponse(resultText, ['outline']);
-            if (parsed && parsed.outline && typeof parsed.outline === 'string' && parsed.outline.trim().length > 0) {
-                console.log('Outline generation - parsed successfully:', parsed.outline.substring(0, 200));
-                // Cluster topics for better formatting
-                return this.clusterTopics(parsed.outline);
+            if (parsed && parsed.outline && typeof parsed.outline === 'string') {
+                const outlineText = parsed.outline.trim();
+                
+                // Reject generic/placeholder content that describes structure instead of actual content
+                const isGenericPlaceholder = outlineText.toLowerCase().includes('main topics discussed') ||
+                                           outlineText.toLowerCase().includes('tasks assigned') ||
+                                           outlineText.toLowerCase().includes('key decisions') ||
+                                           outlineText.toLowerCase().includes('next steps') ||
+                                           outlineText.toLowerCase().includes('agenda items: main topics') ||
+                                           outlineText.toLowerCase().includes('action items: tasks') ||
+                                           (outlineText.toLowerCase().includes('agenda items') && outlineText.toLowerCase().includes('main topics discussed')) ||
+                                           (outlineText.toLowerCase().includes('action items') && outlineText.toLowerCase().includes('tasks assigned'));
+                
+                // Validate it's not a placeholder and not just transcript text
+                if (outlineText.length > 20 && 
+                    !outlineText.toLowerCase().includes('[actual') &&
+                    !outlineText.toLowerCase().includes('[content') &&
+                    !outlineText.toLowerCase().includes('placeholder') &&
+                    !outlineText.toLowerCase().includes('your outline') &&
+                    !isGenericPlaceholder &&
+                    !outlineText.toLowerCase().match(/^(i promise|that's good|i had to|i'll|i don't|i'm)/)) { // Reject transcript-like text
+                    console.log('Outline generation - parsed successfully:', outlineText.substring(0, 200));
+                    // Cluster topics for better formatting
+                    return this.clusterTopics(outlineText);
+                } else if (isGenericPlaceholder) {
+                    console.warn('Outline generation - rejected generic placeholder content:', outlineText.substring(0, 200));
+                    return 'Outline generation failed: The AI model returned generic placeholders instead of actual content. Please try re-analyzing the session.';
+                }
             }
 
             // Fallback: extract outline from text (try multiple patterns)
             const outline = this.extractSection(resultText, ['outline', 'Outline', 'structure', 'topics', 'Topics']);
-            if (outline && outline.trim().length > 0) {
+            if (outline && outline.trim().length > 20 && 
+                !outline.toLowerCase().includes('[actual') &&
+                !outline.toLowerCase().includes('placeholder')) {
                 console.log('Outline generation - extracted from text:', outline.substring(0, 200));
                 return this.clusterTopics(outline);
             }
@@ -1351,12 +1473,32 @@ Transcript: ${truncatedTranscript}`;
                 .replace(/"\s*\}/g, '')
                 .replace(/^"|"$/g, '')
                 .replace(/\\n/g, '\n')
+                .replace(/\[int\]/gi, '') // Remove [int] placeholders
+                .replace(/\[actual[^\]]*\]/gi, '') // Remove [actual...] placeholders
                 .trim();
             
             // If we have cleaned text with actual content, use it
-            if (cleanedText.length > 20 && !cleanedText.match(/^["\s]*$/)) {
+            // But reject if it only contains placeholders or invalid patterns
+            // Also reject generic placeholder content
+            const isGenericPlaceholder = cleanedText.toLowerCase().includes('main topics discussed') ||
+                                       cleanedText.toLowerCase().includes('tasks assigned') ||
+                                       cleanedText.toLowerCase().includes('key decisions') ||
+                                       cleanedText.toLowerCase().includes('next steps') ||
+                                       cleanedText.toLowerCase().includes('agenda items: main topics') ||
+                                       cleanedText.toLowerCase().includes('action items: tasks') ||
+                                       (cleanedText.toLowerCase().includes('agenda items') && cleanedText.toLowerCase().includes('main topics discussed')) ||
+                                       (cleanedText.toLowerCase().includes('action items') && cleanedText.toLowerCase().includes('tasks assigned'));
+            
+            if (cleanedText.length > 20 && 
+                !cleanedText.match(/^["\s]*$/) &&
+                !cleanedText.match(/^\[int\]:?\s*$/i) &&
+                !cleanedText.match(/^\[int\]:\s*\[int\]:/i) &&
+                !isGenericPlaceholder) {
                 console.log('Outline generation - extracted from cleaned JSON structure:', cleanedText.substring(0, 200));
                 return this.clusterTopics(cleanedText);
+            } else if (isGenericPlaceholder) {
+                console.warn('Outline generation - rejected generic placeholder from cleaned text:', cleanedText.substring(0, 200));
+                return 'Outline generation failed: The AI model returned generic placeholders instead of actual content. Please try re-analyzing the session.';
             }
             
             // Try to extract lines that look like topic content
@@ -1367,7 +1509,10 @@ Transcript: ${truncatedTranscript}`;
                        !trimmed.startsWith('}') && 
                        !trimmed.match(/^["\s]*$/) &&
                        !trimmed.startsWith('"outline') &&
-                       !trimmed.match(/^[{}",\s]*$/);
+                       !trimmed.match(/^[{}",\s]*$/) &&
+                       !trimmed.match(/^\[int\]:?\s*$/i) && // Reject [int] lines
+                       !trimmed.match(/^\[int\]:\s*\[int\]:/i) && // Reject [int]: [int]: patterns
+                       !trimmed.match(/^\[\[adji/); // Reject weird patterns like [[adji_adji
             });
             if (lines.length > 0) {
                 const extracted = lines.slice(0, 10).join('\n');
@@ -1376,6 +1521,10 @@ Transcript: ${truncatedTranscript}`;
             }
 
             console.warn('Outline generation - no outline found in response. Full response:', resultText);
+            // If we got [int]: [int]: pattern or weird patterns, the model is confused - return helpful error
+            if (resultText.match(/\[int\]:?\s*\[int\]:?/i) || resultText.match(/\[\[adji/)) {
+                return 'Outline generation failed: The AI model returned invalid output. Please try re-analyzing the session. If this persists, the transcript may be too short or unclear.';
+            }
             // Return a helpful message instead of empty string
             return 'Outline generation is still processing. The AI model may need more time or the transcript may be too short. Try re-analyzing the session.';
         } catch (error: any) {
@@ -1474,16 +1623,31 @@ Transcription: ${truncatedTranscript}`;
                 break;
                 
             default:
-                prompt = `Role: You are a highly skilled assistant specialized in processing transcribed text for General Note-Taking.
+                prompt = `Task: Extract action items from the transcript below.
 
-Extract action items from this transcript. Action items must be:
-- Specific and actionable
-- Include who/what/when if mentioned
-- Clear and concise
+CRITICAL: You MUST return ONLY valid JSON. Do NOT repeat the transcript text. Do NOT write conversational responses like "I don't know" or "I'll take care of this". Extract ONLY actual tasks that were assigned or agreed upon.
 
-Output Format: Return ONLY valid JSON with complete action items. The array must be fully closed with ]. Example: {"action_items":["Complete action item 1","Complete action item 2"]}
+You MUST return ONLY this JSON format (nothing else):
+{"action_items":["item 1","item 2"]}
 
-Transcription: ${truncatedTranscript}`;
+Rules:
+- Do NOT repeat the transcript text
+- Do NOT write conversational responses
+- Extract ONLY real tasks that were assigned or agreed upon
+- If no action items found, return: {"action_items":[]}
+- Do NOT add "Output:" or any prefix
+- Start with { and end with }
+
+Example of GOOD output:
+{"action_items":["Sarah will finalize the budget by Friday","John needs to schedule the launch meeting","Team will review candidate resumes this week"]}
+
+Example of BAD output (DO NOT DO THIS):
+{"action_items":["I don't know how I'm going to face my dad"]}
+
+Transcript to analyze:
+${truncatedTranscript}
+
+Now return ONLY the JSON:`;
         }
 
         progressCallback('Extracting action items...', 80);
@@ -1509,19 +1673,77 @@ Transcription: ${truncatedTranscript}`;
                 max_new_tokens: 512,
                 num_beams: 1,
                 do_sample: false,
-                pad_token_id: this.tokenizer.eos_token_id || 0
+                pad_token_id: this.tokenizer.eos_token_id || 0,
+                early_stopping: false
             });
             
             if (!output || !output[0]) {
                 throw new Error("Model did not return expected output");
             }
             
-            const resultText = this.tokenizer.decode(output[0], { skip_special_tokens: true });
+            let resultText = this.tokenizer.decode(output[0], { skip_special_tokens: true });
+            
+            // Remove common prefixes that models sometimes add
+            resultText = resultText
+                .replace(/^Output:\s*/i, '')
+                .replace(/^Response:\s*/i, '')
+                .replace(/^Here's?\s*/i, '')
+                .trim();
+            
             console.log('Action items generation - raw model output:', resultText);
+            
+            // Check if model just returned transcript text instead of JSON
+            // More comprehensive check for transcript-like content
+            const looksLikeTranscript = resultText.length > 30 && 
+                                       !resultText.trim().startsWith('{') && 
+                                       !resultText.trim().startsWith('[') &&
+                                       (
+                                           resultText.includes('I ') || 
+                                           resultText.includes('I don\'t') || 
+                                           resultText.includes('I\'m') || 
+                                           resultText.includes('I\'ll') ||
+                                           resultText.includes('my ') ||
+                                           resultText.includes('my dad') ||
+                                           resultText.includes('my mom') ||
+                                           resultText.includes('you ') || 
+                                           resultText.includes('that ') ||
+                                           resultText.includes('he ') ||
+                                           resultText.includes('she ') ||
+                                           resultText.includes('stole') ||
+                                           resultText.includes('face my')
+                                       ) &&
+                                       !resultText.includes('"action_items"') &&
+                                       !resultText.includes('action_items:') &&
+                                       !resultText.includes('"action') &&
+                                       !resultText.match(/^\s*\{/); // Not starting with JSON object
+            
+            if (looksLikeTranscript) {
+                console.warn('Action items generation - model returned transcript text instead of JSON:', resultText.substring(0, 100));
+                return []; // Return empty array if model is confused
+            }
             
             const parsed = this.parseJSONResponse(resultText, ['action_items']);
             if (parsed && parsed.action_items && Array.isArray(parsed.action_items) && parsed.action_items.length > 0) {
-                const filtered = parsed.action_items.filter((item: any) => item && typeof item === 'string' && item.trim().length > 0);
+                const filtered = parsed.action_items.filter((item: any) => {
+                    if (!item || typeof item !== 'string') return false;
+                    const trimmed = item.trim();
+                    // Filter out placeholders, invalid items, and transcript-like text
+                    const isValidLength = trimmed.length > 5;
+                    const hasNoPlaceholders = !trimmed.toLowerCase().includes('[actual') &&
+                                             !trimmed.toLowerCase().includes('placeholder') &&
+                                             !trimmed.toLowerCase().startsWith('action item');
+                    // Reject transcript-like conversational text (more comprehensive)
+                    const isNotTranscript = !trimmed.toLowerCase().match(/^(i promise|that's good|i had to|i'll take|good to hear|i don't know|i'm going|i'll face|my dad|my mom|he stole|she stole|stole my)/);
+                    // Should contain action words or be a real task
+                    const looksLikeAction = trimmed.toLowerCase().includes('will') ||
+                                           trimmed.toLowerCase().includes('needs to') ||
+                                           trimmed.toLowerCase().includes('should') ||
+                                           trimmed.toLowerCase().includes('must') ||
+                                           trimmed.toLowerCase().includes('by ') ||
+                                           trimmed.toLowerCase().includes('deadline');
+                    
+                    return isValidLength && hasNoPlaceholders && isNotTranscript && (looksLikeAction || trimmed.length > 15);
+                });
                 if (filtered.length > 0) {
                     console.log('Action items generation - parsed successfully:', filtered.length, 'items');
                     return filtered;
@@ -1530,9 +1752,15 @@ Transcription: ${truncatedTranscript}`;
 
             // Fallback: extract action items from text (try multiple patterns)
             const actionItems = this.extractList(resultText, ['action items', 'action_items', 'todos', 'to-do', 'tasks', 'action', 'Action']);
-            if (actionItems.length > 0) {
-                console.log('Action items generation - extracted from text:', actionItems.length, 'items');
-                return actionItems;
+            const validActionItems = actionItems.filter(item => {
+                const trimmed = item.trim();
+                return trimmed.length > 5 && 
+                       !trimmed.toLowerCase().includes('[actual') &&
+                       !trimmed.toLowerCase().includes('placeholder');
+            });
+            if (validActionItems.length > 0) {
+                console.log('Action items generation - extracted from text:', validActionItems.length, 'items');
+                return validActionItems;
             }
             
             // Last resort: try to extract from incomplete JSON
@@ -1544,6 +1772,17 @@ Transcription: ${truncatedTranscript}`;
                     console.log('Action items generation - extracted from incomplete JSON:', extracted.length, 'items');
                     return extracted;
                 }
+            }
+
+            // Check if model returned confused output (but only if it's the entire response)
+            const lowerText = resultText.toLowerCase().trim();
+            if ((lowerText.startsWith("i'm not sure") || 
+                 lowerText.startsWith("i don't know") ||
+                 lowerText.startsWith("i cannot") ||
+                 lowerText.startsWith("unable to")) && 
+                resultText.length < 100) {
+                console.warn('Action items generation - model returned confused response:', resultText);
+                return []; // Return empty array if model is confused
             }
 
             console.warn('Action items generation - no action items found in response. Full response:', resultText);
@@ -2915,9 +3154,31 @@ const MainApp: React.FC<{ pin: string }> = ({ pin }) => {
     };
 
     const handleStartAnalysis = async (sessionId: number) => {
+        // Try to find session in state first
         let currentSession = sessions.find(s => s.id === sessionId);
+        
+        // If not found in state, try to load from database (might be a timing issue)
         if (!currentSession) {
-            showStatus('Session not found.', 'error');
+            try {
+                const allSessions = await db.getAllSessions(pin);
+                currentSession = allSessions.find(s => s.id === sessionId);
+                if (currentSession) {
+                    // Update state with the session
+                    setSessions(prev => {
+                        const exists = prev.find(s => s.id === sessionId);
+                        if (!exists) {
+                            return [currentSession!, ...prev];
+                        }
+                        return prev;
+                    });
+                }
+            } catch (error) {
+                console.error('Error loading session from database:', error);
+            }
+        }
+        
+        if (!currentSession) {
+            showStatus('Session not found. Please refresh and try again.', 'error');
             return;
         }
 
@@ -3414,7 +3675,7 @@ const NewSessionForm: React.FC<{
                             date,
                             duration,
                             transcript: [],
-                        }, notes, blobToSave).then(sessionId => {
+                        }, notes, blobToSave).then(async (sessionId) => {
                             if (sessionId) {
                                 showStatus('Session saved. Starting transcription...', 'info');
                                 // Reset form
@@ -3424,14 +3685,18 @@ const NewSessionForm: React.FC<{
                                 setAudioBlob(null);
                                 setDuration(0);
                                 chunksRef.current = [];
-                                // Automatically start transcription
-                                onStartAnalysis(sessionId).catch(err => {
-                                    console.error('Failed to start analysis:', err);
-                                });
+                                
+                                // Wait a moment for state to update, then automatically start transcription
+                                setTimeout(() => {
+                                    onStartAnalysis(sessionId).catch(err => {
+                                        console.error('Failed to start analysis:', err);
+                                        showStatus('Transcription failed. You can retry from the session details.', 'error');
+                                    });
+                                }, 300);
                             } else {
                                 showStatus('Failed to auto-save session.', 'error');
+                                setIsSaving(false);
                             }
-                            setIsSaving(false);
                         }).catch(err => {
                             console.error('Error saving session:', err);
                             showStatus('Failed to save session: ' + (err?.message || 'Unknown error'), 'error');
@@ -4592,15 +4857,6 @@ const SessionDetailModal: React.FC<{
                     </div>
                 )}
 
-                {(session.analysisStatus === 'none' || session.analysisStatus === 'failed') && aiAnalysisStatus !== 'in_progress' && (
-                    <div className="action-buttons" style={{ justifyContent: 'center', margin: '20px 0', flexWrap: 'wrap', gap: '8px'}}>
-                        <button className="btn-ai" onClick={handleRunOnDeviceAnalysis}>
-                            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16"><path d="M5 2.5a.5.5 0 0 1 .5-.5h5a.5.5 0 0 1 0 1h-5a.5.5 0 0 1-.5-.5zm0 2a.5.5 0 0 1 .5-.5h5a.5.5 0 0 1 0 1h-5a.5.5 0 0 1-.5-.5zm0 2a.5.5 0 0 1 .5-.5h5a.5.5 0 0 1 0 1h-5a.5.5 0 0 1-.5-.5zm0 2a.5.5 0 0 1 .5-.5h5a.5.5 0 0 1 0 1h-5a.5.5 0 0 1-.5-.5zm0 2a.5.5 0 0 1 .5-.5h5a.5.5 0 0 1 0 1h-5a.5.5 0 0 1-.5-.5z"/><path d="M2 1a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V3a2 2 0 0 0-2-2H2zm12 1a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H2a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1h12z"/></svg>
-                            {session.analysisStatus === 'failed' ? 'Retry Analysis' : 'Run On-Device Analysis'}
-                        </button>
-                    </div>
-                )}
-                
                 {aiAnalysisStatus === 'in_progress' && (
                     <div className="analysis-progress">
                         <div className="spinner-small"></div>
@@ -4632,6 +4888,15 @@ const SessionDetailModal: React.FC<{
                                 🔄 Retry Analysis
                             </button>
                         </div>
+                    </div>
+                )}
+                
+                {(session.analysisStatus === 'none' || session.analysisStatus === 'failed') && aiAnalysisStatus !== 'in_progress' && aiAnalysisStatus !== 'failed' && (
+                    <div className="action-buttons" style={{ justifyContent: 'center', margin: '20px 0', flexWrap: 'wrap', gap: '8px'}}>
+                        <button className="btn-ai" onClick={handleRunOnDeviceAnalysis}>
+                            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16"><path d="M5 2.5a.5.5 0 0 1 .5-.5h5a.5.5 0 0 1 0 1h-5a.5.5 0 0 1-.5-.5zm0 2a.5.5 0 0 1 .5-.5h5a.5.5 0 0 1 0 1h-5a.5.5 0 0 1-.5-.5zm0 2a.5.5 0 0 1 .5-.5h5a.5.5 0 0 1 0 1h-5a.5.5 0 0 1-.5-.5zm0 2a.5.5 0 0 1 .5-.5h5a.5.5 0 0 1 0 1h-5a.5.5 0 0 1-.5-.5zm0 2a.5.5 0 0 1 .5-.5h5a.5.5 0 0 1 0 1h-5a.5.5 0 0 1-.5-.5z"/><path d="M2 1a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V3a2 2 0 0 0-2-2H2zm12 1a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H2a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1h12z"/></svg>
+                            {session.analysisStatus === 'failed' ? 'Retry Analysis' : 'Run Analysis'}
+                        </button>
                     </div>
                 )}
 
@@ -4770,52 +5035,6 @@ const SessionDetailModal: React.FC<{
                                 })}
                             </div>
                         )}
-                    </div>
-                )}
-                
-                {/* AI Analysis Status */}
-                {(session.analysisStatus === 'none' || session.analysisStatus === 'failed') && aiAnalysisStatus !== 'in_progress' && (
-                    <div className="meeting-section">
-                        <div className="action-buttons" style={{ justifyContent: 'center', margin: '20px 0', flexWrap: 'wrap', gap: '8px'}}>
-                            <button className="btn-ai" onClick={handleRunOnDeviceAnalysis}>
-                                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16"><path d="M5 2.5a.5.5 0 0 1 .5-.5h5a.5.5 0 0 1 0 1h-5a.5.5 0 0 1-.5-.5zm0 2a.5.5 0 0 1 .5-.5h5a.5.5 0 0 1 0 1h-5a.5.5 0 0 1-.5-.5zm0 2a.5.5 0 0 1 .5-.5h5a.5.5 0 0 1 0 1h-5a.5.5 0 0 1-.5-.5zm0 2a.5.5 0 0 1 .5-.5h5a.5.5 0 0 1 0 1h-5a.5.5 0 0 1-.5-.5zm0 2a.5.5 0 0 1 .5-.5h5a.5.5 0 0 1 0 1h-5a.5.5 0 0 1-.5-.5z"/><path d="M2 1a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V3a2 2 0 0 0-2-2H2zm12 1a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H2a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1h12z"/></svg>
-                                {session.analysisStatus === 'failed' ? 'Retry Analysis' : 'Run On-Device Analysis'}
-                            </button>
-                        </div>
-                    </div>
-                )}
-                
-                {aiAnalysisStatus === 'in_progress' && (
-                    <div className="analysis-progress">
-                        <div className="spinner-small"></div>
-                        <div className="analysis-progress-text">
-                            <span>{aiProgress.status}</span>
-                            {aiProgress.status.startsWith('Downloading') && (
-                                <div className="download-progress-bar">
-                                    <div className="download-progress-bar-inner" style={{width: `${aiProgress.progress}%`}}></div>
-                                </div>
-                            )}
-                        </div>
-                    </div>
-                )}
-                
-                {aiAnalysisStatus === 'failed' && (
-                    <div className="status error">
-                        <div style={{ marginBottom: '8px' }}>
-                            <strong>On-device AI analysis failed.</strong>
-                        </div>
-                        <div style={{ marginBottom: '8px', fontSize: '0.9em' }}>
-                            {aiProgress.status && aiProgress.status.startsWith('Error:') ? (
-                                <span>{aiProgress.status}</span>
-                            ) : (
-                                <span>Please check the browser console for details and try again.</span>
-                            )}
-                        </div>
-                        <div style={{ display: 'flex', gap: '8px', justifyContent: 'center', flexWrap: 'wrap' }}>
-                            <button className="btn-secondary" onClick={handleRunOnDeviceAnalysis}>
-                                🔄 Retry Analysis
-                            </button>
-                        </div>
                     </div>
                 )}
                 
