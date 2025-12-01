@@ -3847,15 +3847,10 @@ const PreviousNotesList: React.FC<{
     
     return (
         <div className="history-container">
-            {/* Visual Header with Icon */}
-            <div className="history-visual-header">
-                <div className="history-header-icon">📁</div>
-                <h1 className="history-main-title">Meeting Note Directory</h1>
-            </div>
-            
+
             {/* Main Content Area */}
             <div className="history-content-area">
-                <h2 className="history-content-title">Meeting Note Directory</h2>
+            <h2 className="history-content-title">Meeting Notes</h2>
                 
                 {/* Category Tag */}
                 {categoryFilter && (
