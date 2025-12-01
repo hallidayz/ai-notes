@@ -4098,8 +4098,17 @@ const PreviousNotesList: React.FC<{
         });
     }
     
+    // Filter by category if categoryFilter is set
+    let categoryFilteredSessions = viewFilteredSessions;
+    if (categoryFilter) {
+        categoryFilteredSessions = viewFilteredSessions.filter(s => {
+            const sessionCategory = (s.meetingType || 'general').charAt(0).toUpperCase() + (s.meetingType || 'general').slice(1);
+            return sessionCategory === categoryFilter;
+        });
+    }
+    
     // Sort sessions by date (newest first)
-    const sortedSessions = [...viewFilteredSessions].sort((a, b) => {
+    const sortedSessions = [...categoryFilteredSessions].sort((a, b) => {
         return new Date(b.date).getTime() - new Date(a.date).getTime();
     });
     
@@ -4155,7 +4164,7 @@ const PreviousNotesList: React.FC<{
                     </button>
                 </div>
                 
-                {sortedSessions.length === 0 && (searchQuery || viewFilter !== 'all') ? (
+                {sortedSessions.length === 0 && (searchQuery || viewFilter !== 'all' || categoryFilter) ? (
                     <div className="empty-state">No meetings match your filters.</div>
                 ) : (
                     <div className="history-table">
