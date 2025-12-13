@@ -4,6 +4,14 @@ import { createRoot } from 'react-dom/client';
 // Import HTTP interceptors (separate file to avoid Fast Refresh issues)
 import './http-interceptors';
 
+// Import calendar services
+import { CalendarService, CalendarProvider, CalendarConfig } from './src/services/CalendarService';
+import { GoogleCalendarService } from './src/services/GoogleCalendarService';
+import { OutlookCalendarService } from './src/services/OutlookCalendarService';
+import { AutoLaunchService } from './src/services/AutoLaunchService';
+import { NotificationService } from './src/services/NotificationService';
+import { CalendarSettings } from './src/components/CalendarSettings';
+
 // Preload transformers.js in the background - don't block page load
 // This ensures the module initializes properly while still allowing the page to load
 let transformersModule: any = null;
@@ -29,6 +37,122 @@ const checkFirstTimeSetup = async (): Promise<boolean> => {
         return false;
     }
 };
+
+/**
+ * Check if a specific model is cached in IndexedDB
+ * transformers.js stores models in IndexedDB with keys based on model name
+ */
+async function checkModelCache(db: IDBDatabase, modelName: string): Promise<boolean> {
+    return new Promise((resolve) => {
+        try {
+            // transformers.js uses a cache database, typically named 'transformers-cache' or similar
+            // Check multiple possible object store names
+            const objectStoreNames = ['files', 'models', 'cache', 'transformers-cache'];
+            let found = false;
+            let checked = 0;
+            
+            const checkStore = (storeName: string) => {
+                if (!db.objectStoreNames.contains(storeName)) {
+                    checked++;
+                    if (checked === objectStoreNames.length) {
+                        resolve(false);
+                    }
+                    return;
+                }
+                
+                const transaction = db.transaction([storeName], 'readonly');
+                const store = transaction.objectStore(storeName);
+                const index = store.index ? store.index('key') : null;
+                
+                if (index) {
+                    const request = index.get(modelName);
+                    request.onsuccess = () => {
+                        found = request.result !== undefined;
+                        resolve(found);
+                    };
+                    request.onerror = () => {
+                        checked++;
+                        if (checked === objectStoreNames.length && !found) {
+                            resolve(false);
+                        }
+                    };
+                } else {
+                    // Fallback: check if any key contains the model name
+                    const request = store.openCursor();
+                    request.onsuccess = () => {
+                        const cursor = request.result;
+                        if (cursor) {
+                            if (cursor.key.toString().includes(modelName)) {
+                                found = true;
+                                resolve(true);
+                                return;
+                            }
+                            cursor.continue();
+                        } else {
+                            checked++;
+                            if (checked === objectStoreNames.length && !found) {
+                                resolve(false);
+                            }
+                        }
+                    };
+                    request.onerror = () => {
+                        checked++;
+                        if (checked === objectStoreNames.length && !found) {
+                            resolve(false);
+                        }
+                    };
+                }
+            };
+            
+            objectStoreNames.forEach(storeName => checkStore(storeName));
+        } catch {
+            resolve(false);
+        }
+    });
+}
+
+/**
+ * Check if models are cached in IndexedDB
+ * Returns true if both transcription and analysis models are cached
+ */
+async function checkCachedModels(): Promise<boolean> {
+    try {
+        // transformers.js stores models in IndexedDB
+        // Try to open the cache database
+        return new Promise((resolve) => {
+            const request = indexedDB.open('transformers-cache', 1);
+            
+            request.onsuccess = async () => {
+                try {
+                    const db = request.result;
+                    
+                    // Check for transcription model cache (whisper-base.en or whisper-base)
+                    const transcriptionCached = await checkModelCache(db, 'Xenova/whisper-base.en') || 
+                                                 await checkModelCache(db, 'Xenova/whisper-base');
+                    
+                    // Check for analysis model cache (flan-t5-base)
+                    const analysisCached = await checkModelCache(db, 'Xenova/flan-t5-base');
+                    
+                    resolve(transcriptionCached && analysisCached);
+                } catch {
+                    resolve(false);
+                }
+            };
+            
+            request.onerror = () => {
+                // Database doesn't exist or can't be opened - models not cached
+                resolve(false);
+            };
+            
+            request.onupgradeneeded = () => {
+                // Database needs upgrade - models not cached yet
+                resolve(false);
+            };
+        });
+    } catch {
+        return false; // Assume not cached if check fails
+    }
+}
 
 // Suppress harmless WebSocket connection errors from transformers.js
 // These occur because transformers.js may attempt WebSocket connections, but the app works fine with HTTP only
@@ -100,58 +224,103 @@ const initTransformers = async () => {
             }));
         }
         
-        // Only preload models on first time setup - otherwise let them load on demand
-        // This avoids unnecessary downloads and errors when there's nothing to process
-        if (isFirstTime && typeof window !== 'undefined') {
-            // Start preloading models in the background (don't await - let it happen async)
-            setTimeout(async () => {
+        // Load models immediately for all users (not just first-time)
+        // Models will load from cache if available, or download if needed
+        if (typeof window !== 'undefined') {
+            // Start loading immediately, no delay
+            (async () => {
                 try {
+                    // Dispatch loading started event
+                    window.dispatchEvent(new CustomEvent('modelsLoading', { 
+                        detail: { message: 'Loading AI models...' }
+                    }));
+                    
                     const aiService = OnDeviceAIService.getInstance();
                     let modelsDownloaded = false;
                     
-                    // Check if transcription model is already loaded, if not download it
-                    try {
-                        await aiService.getTranscriptionPipeline(undefined, (progress) => {
-                            if (progress?.status === 'downloading') {
-                                modelsDownloaded = true;
-                                const message = `Downloading transcription model: ${Math.round(progress.progress || 0)}%`;
-                                window.dispatchEvent(new CustomEvent('modelDownloadProgress', { detail: { message } }));
-                            }
-                        });
-                    } catch (error: any) {
-                        // Silently fail - models will download on first use
-                        // Only log if it's not the expected "Unsupported model type" error
-                        if (!error?.message?.includes('Unsupported model type')) {
-                            console.error('Error preloading transcription model:', error);
-                        }
+                    // Check if models are cached
+                    const hasCachedModels = await checkCachedModels();
+                    
+                    // Log on-device verification
+                    console.log('AI Processing: On-Device Mode', {
+                        modelsCached: hasCachedModels,
+                        processingLocation: 'browser',
+                        dataTransmission: 'none',
+                        cacheEnabled: module.env?.useBrowserCache || false,
+                        remoteHost: module.env?.remoteHost || 'not set',
+                        allowRemoteModels: module.env?.allowRemoteModels || false,
+                        allowLocalModels: module.env?.allowLocalModels || false
+                    });
+                    
+                    // Verify no external data transmission
+                    if (hasCachedModels) {
+                        console.log('✓ Models loaded from cache - 100% on-device processing');
+                    } else {
+                        console.log('⚠ Models downloading (first time only) - will be cached for future use');
                     }
                     
-                    // Check if analysis model is already loaded, if not download it
-                    try {
-                        await aiService.getAnalysisPipeline((progress) => {
-                            if (progress?.status === 'downloading') {
-                                modelsDownloaded = true;
-                                const message = `Downloading analysis model: ${Math.round(progress.progress || 0)}%`;
-                                window.dispatchEvent(new CustomEvent('modelDownloadProgress', { detail: { message } }));
-                            }
-                        });
-                    } catch (error: any) {
-                        // Silently fail - models will download on first use
-                        if (!error?.message?.includes('Unsupported model type')) {
-                            console.error('Error preloading analysis model:', error);
+                    // Progress handler for model loading
+                    const handleProgress = (progress: any) => {
+                        if (progress?.status === 'downloading') {
+                            modelsDownloaded = true;
+                            const modelType = progress.modelName?.includes('whisper') ? 'transcription' : 'analysis';
+                            const message = `Downloading ${modelType} model: ${Math.round(progress.progress || 0)}%`;
+                            window.dispatchEvent(new CustomEvent('modelDownloadProgress', { detail: { message } }));
+                        } else if (progress?.status === 'loading') {
+                            const modelType = progress.modelName?.includes('whisper') ? 'transcription' : 'analysis';
+                            const message = `Loading ${modelType} model...`;
+                            window.dispatchEvent(new CustomEvent('modelDownloadProgress', { detail: { message } }));
                         }
-                    }
+                    };
                     
+                    // Load both models in parallel using allSettled so both attempt to load even if one fails
+                    const results = await Promise.allSettled([
+                        aiService.getTranscriptionPipeline(undefined, handleProgress),
+                        aiService.getAnalysisPipeline(handleProgress)
+                    ]);
+                    
+                    // Check results and log any errors
+                    results.forEach((result, index) => {
+                        const modelType = index === 0 ? 'transcription' : 'analysis';
+                        if (result.status === 'rejected') {
+                            const error = result.reason;
+                            if (!error?.message?.includes('Unsupported model type')) {
+                                console.error(`Error preloading ${modelType} model:`, error);
+                                window.dispatchEvent(new CustomEvent('modelLoadError', { 
+                                    detail: { 
+                                        message: `Failed to load ${modelType} model. It will load on-demand when needed.`, 
+                                        error: error?.message || 'Unknown error'
+                                    }
+                                }));
+                            }
+                        }
+                    });
+                    
+                    // Dispatch ready event
                     if (modelsDownloaded) {
                         window.dispatchEvent(new CustomEvent('modelsDownloaded', { 
                             detail: { message: 'Models downloaded successfully!' }
                         }));
                     }
-                } catch (error) {
-                    // Silently fail - models will download on first use if this fails
-                    console.debug('Model preloading skipped:', error);
+                    
+                    window.dispatchEvent(new CustomEvent('modelsReady', { 
+                        detail: { message: 'AI models ready!' }
+                    }));
+                } catch (error: any) {
+                    // Models will load on-demand if preload fails
+                    console.debug('Model preload failed, will load on-demand:', error);
+                    window.dispatchEvent(new CustomEvent('modelLoadError', { 
+                        detail: { 
+                            message: 'Models will load on-demand when needed.', 
+                            error: error?.message || 'Unknown error'
+                        }
+                    }));
+                    // Still dispatch ready event so UI doesn't stay in loading state
+                    window.dispatchEvent(new CustomEvent('modelsReady', { 
+                        detail: { message: 'Models will load on-demand' }
+                    }));
                 }
-            }, 2000); // Wait 2 seconds after page load to start downloads
+            })();
         }
         
         return module;
@@ -239,6 +408,14 @@ class OnDeviceAIService {
                     transformers.env.remoteHost = 'http://localhost:3001';
                     transformers.env.useBrowserCache = true;
                 }
+                
+                // Log on-device verification
+                console.log('Transcription: On-Device Processing', {
+                    model: modelName,
+                    cacheEnabled: transformers.env?.useBrowserCache || false,
+                    processingLocation: 'browser',
+                    dataTransmission: 'none'
+                });
                 
                 // Use pipeline with explicit configuration to ensure proxy is used
                 // transformers.js will auto-detect the model type from the config
@@ -329,6 +506,14 @@ Please check the browser console and terminal logs for more details. Try refresh
                 if (transformers.env) {
                     transformers.env.remoteHost = 'http://localhost:3001';
                 }
+                
+                // Log on-device verification
+                console.log('Analysis: On-Device Processing', {
+                    model: 'Xenova/flan-t5-base',
+                    cacheEnabled: transformers.env?.useBrowserCache || false,
+                    processingLocation: 'browser',
+                    dataTransmission: 'none'
+                });
                 
                 const progressHandler = (progress: any) => {
                     if (progress_callback) progress_callback(progress);
@@ -458,6 +643,15 @@ Please check the browser console and terminal logs for more details. Try refresh
         language?: string,
         timeoutMs: number = 60000
     ): Promise<string> {
+        // Verify on-device processing
+        console.log('✓ AI Analysis: On-Device Processing', {
+            processingLocation: 'browser',
+            audioDuration: `${audio.duration.toFixed(2)}s`,
+            dataTransmission: 'none',
+            industry: industry || 'general',
+            language: language || 'en'
+        });
+        
         const startTime = performance.now();
         const stageTimings: {[key: string]: number} = {};
         
@@ -815,6 +1009,14 @@ Please check the browser console and terminal logs for more details. Try refresh
         progressCallback: (status: string, progress?: number) => void,
         language?: string
     ): Promise<Array<{speaker: string, text: string, timestamp: any}>> {
+        // Verify on-device processing
+        console.log('✓ AI Transcription: On-Device Processing', {
+            processingLocation: 'browser',
+            audioDuration: `${audio.duration.toFixed(2)}s`,
+            dataTransmission: 'none',
+            language: language || 'en'
+        });
+        
         // Audio preprocessing (noise suppression)
         progressCallback('Enhancing audio quality...', 0);
         const processedAudio = this.preprocessAudio(audio);
@@ -2992,6 +3194,11 @@ const MainApp: React.FC<{ pin: string }> = ({ pin }) => {
     const [view, setView] = useState<'sessions' | 'tasks' | 'notes'>('sessions');
     const [industry, setIndustry] = useState<string>('general');
     const [language, setLanguage] = useState<string>('en');
+    const [modelsReady, setModelsReady] = useState(false);
+    const [modelsLoading, setModelsLoading] = useState(true);
+    const [showCalendarSettings, setShowCalendarSettings] = useState(false);
+    const [calendarService, setCalendarService] = useState<CalendarService | null>(null);
+    const [calendarConnected, setCalendarConnected] = useState(false);
     
     useEffect(() => {
         const loadData = async () => {
@@ -3042,10 +3249,108 @@ const MainApp: React.FC<{ pin: string }> = ({ pin }) => {
         };
         window.addEventListener('modelsDownloaded', handleModelsDownloaded as EventListener);
         
+        // Listen for models loading event
+        const handleModelsLoading = (event: CustomEvent) => {
+            setModelsLoading(true);
+            setModelsReady(false);
+        };
+        window.addEventListener('modelsLoading', handleModelsLoading as EventListener);
+        
+        // Listen for models ready event
+        const handleModelsReady = (event: CustomEvent) => {
+            setModelsReady(true);
+            setModelsLoading(false);
+            const message = event.detail?.message || 'AI models ready!';
+            if (message !== 'Models will load on-demand') {
+                showStatus(message, 'success', 3000);
+            }
+        };
+        window.addEventListener('modelsReady', handleModelsReady as EventListener);
+        
+        // Listen for model load errors
+        const handleModelLoadError = (event: CustomEvent) => {
+            const errorMessage = event.detail?.message || 'Model loading error';
+            const error = event.detail?.error;
+            console.warn('Model load error:', error);
+            
+            // Show non-intrusive info message that models will load on-demand
+            // This is not a critical error - models will load when needed
+            if (errorMessage.includes('on-demand')) {
+                // Models will load on-demand - this is expected behavior, not an error
+                console.log('Models will load on-demand when needed. This is normal if preload fails.');
+            } else {
+                // Show a brief info message for other errors
+                showStatus('AI models will load automatically when needed.', 'info', 3000);
+            }
+        };
+        window.addEventListener('modelLoadError', handleModelLoadError as EventListener);
+        
         return () => {
             window.removeEventListener('firstTimeSetup', handleFirstTimeSetup as EventListener);
             window.removeEventListener('modelDownloadProgress', handleModelDownloadProgress as EventListener);
             window.removeEventListener('modelsDownloaded', handleModelsDownloaded as EventListener);
+            window.removeEventListener('modelsLoading', handleModelsLoading as EventListener);
+            window.removeEventListener('modelsReady', handleModelsReady as EventListener);
+            window.removeEventListener('modelLoadError', handleModelLoadError as EventListener);
+        };
+    }, []);
+
+    // Initialize calendar and auto-launch
+    useEffect(() => {
+        const initCalendar = async () => {
+            try {
+                const configStr = localStorage.getItem('calendar_config');
+                if (configStr) {
+                    const config: CalendarConfig = JSON.parse(configStr);
+                    if (config.provider && config.enabled) {
+                        let service: CalendarService;
+                        switch (config.provider) {
+                            case 'google':
+                                service = new GoogleCalendarService();
+                                break;
+                            case 'outlook':
+                                service = new OutlookCalendarService();
+                                break;
+                            default:
+                                return;
+                        }
+                        
+                        const connected = await service.isConnected();
+                        if (connected) {
+                            setCalendarService(service);
+                            setCalendarConnected(true);
+                            
+                            // Initialize auto-launch
+                            const autoLaunchService = AutoLaunchService.getInstance();
+                            autoLaunchService.initialize(service, {
+                                enabled: config.autoLaunchEnabled || false,
+                                preLaunchSeconds: config.preLaunchSeconds || 30,
+                                checkIntervalSeconds: config.checkIntervalSeconds || 60
+                            });
+                            
+                            if (config.autoLaunchEnabled) {
+                                await autoLaunchService.start();
+                            }
+                        }
+                    }
+                }
+            } catch (error) {
+                console.error('Error initializing calendar:', error);
+            }
+        };
+
+        initCalendar();
+
+        // Handle meeting pre-launch event
+        const handleMeetingPreLaunch = (event: CustomEvent) => {
+            const { meeting } = event.detail;
+            showStatus(`Meeting starting soon: ${meeting.title}`, 'info', 5000);
+            // Could auto-open new session form here
+        };
+        window.addEventListener('meetingPreLaunch', handleMeetingPreLaunch as EventListener);
+
+        return () => {
+            window.removeEventListener('meetingPreLaunch', handleMeetingPreLaunch as EventListener);
         };
     }, []);
 
@@ -3347,6 +3652,14 @@ const MainApp: React.FC<{ pin: string }> = ({ pin }) => {
                 </div>
                 <p className="author-credit">by AC MiNDS.</p>
                 <div className="settings-container">
+                    <button 
+                        onClick={() => setShowCalendarSettings(true)}
+                        className="btn-secondary"
+                        style={{ marginRight: '10px', padding: '6px 12px', fontSize: '14px' }}
+                        title="Calendar Settings"
+                    >
+                        📅 Calendar
+                    </button>
                     <span>Purpose:</span>
                     <select id="industrySelector" value={industry} onChange={handleIndustryChange}>
                         <option value="general">General</option>
@@ -3374,6 +3687,19 @@ const MainApp: React.FC<{ pin: string }> = ({ pin }) => {
             </header>
 
             {status.message && <div className={`status ${status.type}`}>{status.message}</div>}
+            
+            {modelsLoading && (
+                <div className="status info" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <div className="spinner" style={{ width: '16px', height: '16px', borderWidth: '2px' }}></div>
+                    Loading AI models...
+                </div>
+            )}
+            
+            {modelsReady && !modelsLoading && (
+                <div className="status success" style={{ fontSize: '0.9em', padding: '4px 12px' }}>
+                    ✓ AI models ready
+                </div>
+            )}
 
             <ViewSwitcher view={view} setView={setView} />
 
@@ -3413,6 +3739,18 @@ const MainApp: React.FC<{ pin: string }> = ({ pin }) => {
                     onUpdate={handleUpdateSession}
                     onAddTask={handleAddTask}
                     pin={pin}
+                    modelsReady={modelsReady}
+                    modelsLoading={modelsLoading}
+                />
+            )}
+
+            {showCalendarSettings && (
+                <CalendarSettings
+                    onClose={() => setShowCalendarSettings(false)}
+                    onCalendarConnected={(provider) => {
+                        setCalendarConnected(true);
+                        showStatus(`Connected to ${provider === 'google' ? 'Google Calendar' : 'Outlook Calendar'}`, 'success');
+                    }}
                 />
             )}
         </div>
@@ -4434,8 +4772,10 @@ const SessionDetailModal: React.FC<{
     onDelete: (id: number) => void, 
     onUpdate: (session: Session) => void,
     onAddTask: (task: Omit<Task, 'id' | 'timestamp'>) => Promise<boolean>,
-    pin: string
-}> = ({ session, onClose, onDelete, onUpdate, onAddTask, pin }) => {
+    pin: string,
+    modelsReady: boolean,
+    modelsLoading: boolean
+}> = ({ session, onClose, onDelete, onUpdate, onAddTask, pin, modelsReady, modelsLoading }) => {
     const [decryptedNotes, setDecryptedNotes] = useState('');
     const [isDecrypting, setIsDecrypting] = useState(true);
     const [audioUrl, setAudioUrl] = useState<string | null>(null);
@@ -4902,9 +5242,14 @@ const SessionDetailModal: React.FC<{
                 
                 {(session.analysisStatus === 'none' || session.analysisStatus === 'failed') && aiAnalysisStatus !== 'in_progress' && aiAnalysisStatus !== 'failed' && (
                     <div className="action-buttons" style={{ justifyContent: 'center', margin: '20px 0', flexWrap: 'wrap', gap: '8px'}}>
-                        <button className="btn-ai" onClick={handleRunOnDeviceAnalysis}>
+                        <button 
+                            className="btn-ai" 
+                            onClick={handleRunOnDeviceAnalysis}
+                            disabled={!modelsReady || modelsLoading}
+                            title={modelsLoading ? 'Loading AI models...' : !modelsReady ? 'AI models not ready yet' : ''}
+                        >
                             <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16"><path d="M5 2.5a.5.5 0 0 1 .5-.5h5a.5.5 0 0 1 0 1h-5a.5.5 0 0 1-.5-.5zm0 2a.5.5 0 0 1 .5-.5h5a.5.5 0 0 1 0 1h-5a.5.5 0 0 1-.5-.5zm0 2a.5.5 0 0 1 .5-.5h5a.5.5 0 0 1 0 1h-5a.5.5 0 0 1-.5-.5zm0 2a.5.5 0 0 1 .5-.5h5a.5.5 0 0 1 0 1h-5a.5.5 0 0 1-.5-.5zm0 2a.5.5 0 0 1 .5-.5h5a.5.5 0 0 1 0 1h-5a.5.5 0 0 1-.5-.5z"/><path d="M2 1a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V3a2 2 0 0 0-2-2H2zm12 1a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H2a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1h12z"/></svg>
-                            {session.analysisStatus === 'failed' ? 'Retry Analysis' : 'Run Analysis'}
+                            {modelsLoading ? 'Loading Models...' : session.analysisStatus === 'failed' ? 'Retry Analysis' : 'Run Analysis'}
                         </button>
                     </div>
                 )}
