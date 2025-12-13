@@ -72,6 +72,13 @@ export class AutoLaunchService {
             this.config.checkIntervalSeconds * 1000
         );
 
+        // Notify service worker to start monitoring
+        this.notifyServiceWorker('START_MONITORING', {
+            checkIntervalSeconds: this.config.checkIntervalSeconds,
+            preLaunchSeconds: this.config.preLaunchSeconds,
+            autoStartRecording: this.config.autoStartRecording
+        });
+
         console.log('Auto-launch service started', {
             checkInterval: this.config.checkIntervalSeconds,
             preLaunchSeconds: this.config.preLaunchSeconds
@@ -88,6 +95,10 @@ export class AutoLaunchService {
         }
         this.upcomingMeetings.clear();
         this.notifiedMeetings.clear();
+        
+        // Notify service worker to stop monitoring
+        this.notifyServiceWorker('STOP_MONITORING');
+        
         console.log('Auto-launch service stopped');
     }
 
@@ -223,5 +234,29 @@ export class AutoLaunchService {
      */
     getConfig(): AutoLaunchConfig {
         return { ...this.config };
+    }
+
+    /**
+     * Send message to service worker
+     */
+    private notifyServiceWorker(type: 'START_MONITORING' | 'STOP_MONITORING', config?: any): void {
+        if ('serviceWorker' in navigator && navigator.serviceWorker.controller) {
+            navigator.serviceWorker.controller.postMessage({
+                type,
+                config
+            });
+        } else if ('serviceWorker' in navigator) {
+            // Service worker might not be ready yet, wait for it
+            navigator.serviceWorker.ready.then((registration) => {
+                if (registration.active) {
+                    registration.active.postMessage({
+                        type,
+                        config
+                    });
+                }
+            }).catch((error) => {
+                console.warn('Failed to send message to service worker:', error);
+            });
+        }
     }
 }

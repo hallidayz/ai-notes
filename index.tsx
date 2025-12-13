@@ -50,12 +50,20 @@ async function checkModelCache(db: IDBDatabase, modelName: string): Promise<bool
             const objectStoreNames = ['files', 'models', 'cache', 'transformers-cache'];
             let found = false;
             let checked = 0;
+            let resolved = false; // Track if promise has been resolved
+            
+            const safeResolve = (value: boolean) => {
+                if (!resolved) {
+                    resolved = true;
+                    resolve(value);
+                }
+            };
             
             const checkStore = (storeName: string) => {
                 if (!db.objectStoreNames.contains(storeName)) {
                     checked++;
-                    if (checked === objectStoreNames.length) {
-                        resolve(false);
+                    if (checked === objectStoreNames.length && !resolved) {
+                        safeResolve(false);
                     }
                     return;
                 }
@@ -67,13 +75,20 @@ async function checkModelCache(db: IDBDatabase, modelName: string): Promise<bool
                 if (index) {
                     const request = index.get(modelName);
                     request.onsuccess = () => {
-                        found = request.result !== undefined;
-                        resolve(found);
+                        if (request.result !== undefined) {
+                            found = true;
+                            safeResolve(true);
+                        } else {
+                            checked++;
+                            if (checked === objectStoreNames.length && !resolved) {
+                                safeResolve(false);
+                            }
+                        }
                     };
                     request.onerror = () => {
                         checked++;
-                        if (checked === objectStoreNames.length && !found) {
-                            resolve(false);
+                        if (checked === objectStoreNames.length && !found && !resolved) {
+                            safeResolve(false);
                         }
                     };
                 } else {
@@ -84,21 +99,21 @@ async function checkModelCache(db: IDBDatabase, modelName: string): Promise<bool
                         if (cursor) {
                             if (cursor.key.toString().includes(modelName)) {
                                 found = true;
-                                resolve(true);
+                                safeResolve(true);
                                 return;
                             }
                             cursor.continue();
                         } else {
                             checked++;
-                            if (checked === objectStoreNames.length && !found) {
-                                resolve(false);
+                            if (checked === objectStoreNames.length && !found && !resolved) {
+                                safeResolve(false);
                             }
                         }
                     };
                     request.onerror = () => {
                         checked++;
-                        if (checked === objectStoreNames.length && !found) {
-                            resolve(false);
+                        if (checked === objectStoreNames.length && !found && !resolved) {
+                            safeResolve(false);
                         }
                     };
                 }
@@ -106,7 +121,10 @@ async function checkModelCache(db: IDBDatabase, modelName: string): Promise<bool
             
             objectStoreNames.forEach(storeName => checkStore(storeName));
         } catch {
-            resolve(false);
+            if (!resolved) {
+                resolved = true;
+                resolve(false);
+            }
         }
     });
 }
@@ -3325,7 +3343,8 @@ const MainApp: React.FC<{ pin: string }> = ({ pin }) => {
                             autoLaunchService.initialize(service, {
                                 enabled: config.autoLaunchEnabled || false,
                                 preLaunchSeconds: config.preLaunchSeconds || 30,
-                                checkIntervalSeconds: config.checkIntervalSeconds || 60
+                                checkIntervalSeconds: config.checkIntervalSeconds || 60,
+                                autoStartRecording: config.autoStartRecording || false
                             });
                             
                             if (config.autoLaunchEnabled) {

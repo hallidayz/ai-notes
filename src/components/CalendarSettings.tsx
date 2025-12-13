@@ -51,11 +51,19 @@ export const CalendarSettings: React.FC<CalendarSettingsProps> = ({ onClose, onC
             const configStr = localStorage.getItem('calendar_config');
             if (configStr) {
                 const config: CalendarConfig = JSON.parse(configStr);
-                if (config.provider && config.credentials) {
-                    const service = getCalendarService(config.provider);
-                    const connected = await service.isConnected();
-                    setIsConnected(connected);
-                    setConnectedProvider(connected ? config.provider : null);
+                if (config.provider) {
+                    // Check if credentials exist in localStorage (stored separately)
+                    const credsKey = `calendar_${config.provider}_creds`;
+                    const credentials = localStorage.getItem(credsKey);
+                    if (credentials) {
+                        const service = getCalendarService(config.provider);
+                        const connected = await service.isConnected();
+                        setIsConnected(connected);
+                        setConnectedProvider(connected ? config.provider : null);
+                    } else {
+                        setIsConnected(false);
+                        setConnectedProvider(null);
+                    }
                 }
             }
         } catch (error) {
@@ -86,13 +94,18 @@ export const CalendarSettings: React.FC<CalendarSettingsProps> = ({ onClose, onC
             setIsConnected(true);
             setConnectedProvider(selectedProvider);
             
+            // Load existing config to preserve autoStartRecording if it exists
+            const existingConfigStr = localStorage.getItem('calendar_config');
+            const existingConfig = existingConfigStr ? JSON.parse(existingConfigStr) : {};
+            
             // Save config
             const config: CalendarConfig = {
                 enabled: true,
                 provider: selectedProvider,
                 autoLaunchEnabled,
                 preLaunchSeconds,
-                checkIntervalSeconds
+                checkIntervalSeconds,
+                autoStartRecording: existingConfig.autoStartRecording || false
             };
             localStorage.setItem('calendar_config', JSON.stringify(config));
 
@@ -141,7 +154,8 @@ export const CalendarSettings: React.FC<CalendarSettingsProps> = ({ onClose, onC
         autoLaunchService.updateConfig({
             enabled: autoLaunchEnabled && isConnected,
             preLaunchSeconds,
-            checkIntervalSeconds
+            checkIntervalSeconds,
+            autoStartRecording: config.autoStartRecording || false
         });
 
         onClose();

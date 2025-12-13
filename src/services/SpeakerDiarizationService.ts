@@ -254,22 +254,50 @@ export class SpeakerDiarizationService {
      */
     private async saveToIndexedDB(profile: SpeakerProfile): Promise<void> {
         return new Promise((resolve, reject) => {
-            const request = indexedDB.open(this.DB_NAME, 1);
-
-            request.onerror = () => reject(request.error);
-            request.onsuccess = () => {
-                const db = request.result;
-                let transaction: IDBTransaction;
-                let store: IDBObjectStore;
-
-                if (!db.objectStoreNames.contains(this.STORE_NAME)) {
-                    // Create store if it doesn't exist
-                    transaction = db.transaction([this.STORE_NAME], 'readwrite');
-                    store = transaction.objectStore(this.STORE_NAME);
-                } else {
-                    transaction = db.transaction([this.STORE_NAME], 'readwrite');
-                    store = transaction.objectStore(this.STORE_NAME);
-                }
+            // First, ensure the database and store exist
+            const ensureStoreExists = (): Promise<IDBDatabase> => {
+                return new Promise((resolveStore, rejectStore) => {
+                    const checkRequest = indexedDB.open(this.DB_NAME, 1);
+                    
+                    checkRequest.onerror = () => rejectStore(checkRequest.error);
+                    
+                    checkRequest.onupgradeneeded = (event) => {
+                        const db = (event.target as IDBOpenDBRequest).result;
+                        if (!db.objectStoreNames.contains(this.STORE_NAME)) {
+                            const objectStore = db.createObjectStore(this.STORE_NAME, { keyPath: 'id' });
+                            objectStore.createIndex('name', 'name', { unique: false });
+                            objectStore.createIndex('lastSeen', 'lastSeen', { unique: false });
+                        }
+                    };
+                    
+                    checkRequest.onsuccess = () => {
+                        const db = checkRequest.result;
+                        // If store doesn't exist, we need to upgrade
+                        if (!db.objectStoreNames.contains(this.STORE_NAME)) {
+                            db.close();
+                            // Reopen with version bump to trigger upgrade
+                            const upgradeRequest = indexedDB.open(this.DB_NAME, 2);
+                            upgradeRequest.onupgradeneeded = (event) => {
+                                const upgradeDb = (event.target as IDBOpenDBRequest).result;
+                                if (!upgradeDb.objectStoreNames.contains(this.STORE_NAME)) {
+                                    const objectStore = upgradeDb.createObjectStore(this.STORE_NAME, { keyPath: 'id' });
+                                    objectStore.createIndex('name', 'name', { unique: false });
+                                    objectStore.createIndex('lastSeen', 'lastSeen', { unique: false });
+                                }
+                            };
+                            upgradeRequest.onsuccess = () => resolveStore(upgradeRequest.result);
+                            upgradeRequest.onerror = () => rejectStore(upgradeRequest.error);
+                        } else {
+                            resolveStore(db);
+                        }
+                    };
+                });
+            };
+            
+            ensureStoreExists().then((db) => {
+                // Now we can safely create a transaction since the store exists
+                const transaction = db.transaction([this.STORE_NAME], 'readwrite');
+                const store = transaction.objectStore(this.STORE_NAME);
 
                 // Convert Float32Array to regular array for storage
                 const profileToStore = {
@@ -280,16 +308,9 @@ export class SpeakerDiarizationService {
                 const putRequest = store.put(profileToStore);
                 putRequest.onsuccess = () => resolve();
                 putRequest.onerror = () => reject(putRequest.error);
-            };
-
-            request.onupgradeneeded = (event) => {
-                const db = (event.target as IDBOpenDBRequest).result;
-                if (!db.objectStoreNames.contains(this.STORE_NAME)) {
-                    const objectStore = db.createObjectStore(this.STORE_NAME, { keyPath: 'id' });
-                    objectStore.createIndex('name', 'name', { unique: false });
-                    objectStore.createIndex('lastSeen', 'lastSeen', { unique: false });
-                }
-            };
+            }).catch((error) => {
+                reject(error);
+            });
         });
     }
 

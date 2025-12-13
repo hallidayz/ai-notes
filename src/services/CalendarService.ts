@@ -33,6 +33,7 @@ export interface CalendarConfig {
     autoLaunchEnabled?: boolean;
     preLaunchSeconds?: number; // Default 30
     checkIntervalSeconds?: number; // Default 60
+    autoStartRecording?: boolean; // Optional: auto-start recording when meeting launches
 }
 
 /**
