@@ -11,6 +11,9 @@ import { AutoLaunchService } from '../services/AutoLaunchService';
 import { NotificationService } from '../services/NotificationService';
 import { CalendarSettings } from '../components/CalendarSettings';
 import { AuthService } from '../services/AuthService';
+import { Sidebar } from '../components/Sidebar';
+import { EditorArea } from '../components/EditorArea';
+import { ContextRail } from '../components/ContextRail';
 
 // Preload transformers.js in the background - don't block page load
 // This ensures the module initializes properly while still allowing the page to load
@@ -2157,6 +2160,7 @@ declare global {
 interface TranscriptChunk {
     speaker: string;
     text: string;
+    timestamp?: [number, number]; // Optional timestamp [start, end] in seconds
 }
 
 interface TodoItem {
@@ -2181,6 +2185,20 @@ interface Attachment {
     timestamp?: number; // When in the meeting it was mentioned
 }
 
+interface Bookmark {
+    chunkIndex: number; // Index in transcript array
+    timestamp: number; // Audio timestamp in seconds
+    note?: string; // Optional user note
+    createdAt: number; // When bookmark was created (timestamp)
+}
+
+interface Topic {
+    title: string;
+    startTime: number;
+    endTime: number;
+    chunkIndices: number[];
+}
+
 interface Session {
     id?: number;
     sessionTitle: string;
@@ -2201,6 +2219,8 @@ interface Session {
     attachments?: Attachment[] | string; // Files, links, resources mentioned
     meetingType?: string; // e.g., 'Zoom', 'Teams', 'in-person'
     platform?: string; // Meeting platform
+    // New fields for UI/UX improvements
+    bookmarks?: Bookmark[] | string; // Array or JSON string
 }
 
 // Helper functions to parse JSON fields safely
@@ -2246,6 +2266,96 @@ const parseOutline = (outline: string | undefined): string => {
     } catch {
         return outline;
     }
+};
+
+const parseBookmarks = (bookmarks: Bookmark[] | string | undefined): Bookmark[] => {
+    if (!bookmarks) return [];
+    if (typeof bookmarks === 'string') {
+        try {
+            return JSON.parse(bookmarks);
+        } catch {
+            return [];
+        }
+    }
+    return bookmarks;
+};
+
+// Parse outline into structured topics with timestamps
+const parseTopicsFromOutline = (outline: string, transcript: TranscriptChunk[]): Topic[] => {
+    if (!outline || transcript.length === 0) return [];
+    
+    const topics: Topic[] = [];
+    const lines = outline.split('\n').filter(line => line.trim().length > 0);
+    
+    let currentTopic: Topic | null = null;
+    let topicLines: string[] = [];
+    
+    for (let i = 0; i < lines.length; i++) {
+        const line = lines[i].trim();
+        
+        // Detect topic headers
+        const isTopicHeader = /^(\d+[\.\)]|\-|\*|Topic|Section|Part)\s+[A-Z]/.test(line) || 
+                             (line.length < 80 && /^[A-Z][^\.]{5,}/.test(line) && !line.includes('.'));
+        
+        if (isTopicHeader) {
+            // Save previous topic
+            if (currentTopic) {
+                // Match topic to transcript chunks by content similarity
+                const matchedChunks = matchTopicToChunks(topicLines.join(' '), transcript);
+                currentTopic.chunkIndices = matchedChunks;
+                if (matchedChunks.length > 0) {
+                    const firstChunk = transcript[matchedChunks[0]];
+                    const lastChunk = transcript[matchedChunks[matchedChunks.length - 1]];
+                    currentTopic.startTime = firstChunk.timestamp?.[0] || 0;
+                    currentTopic.endTime = lastChunk.timestamp?.[1] || currentTopic.startTime;
+                }
+                topics.push(currentTopic);
+            }
+            
+            // Start new topic
+            const title = line.replace(/^(\d+[\.\)]|\-|\*|Topic:|Section:|Part\s+)/i, '').trim();
+            currentTopic = {
+                title,
+                startTime: 0,
+                endTime: 0,
+                chunkIndices: []
+            };
+            topicLines = [];
+        } else if (currentTopic) {
+            topicLines.push(line);
+        }
+    }
+    
+    // Add last topic
+    if (currentTopic) {
+        const matchedChunks = matchTopicToChunks(topicLines.join(' '), transcript);
+        currentTopic.chunkIndices = matchedChunks;
+        if (matchedChunks.length > 0) {
+            const firstChunk = transcript[matchedChunks[0]];
+            const lastChunk = transcript[matchedChunks[matchedChunks.length - 1]];
+            currentTopic.startTime = firstChunk.timestamp?.[0] || 0;
+            currentTopic.endTime = lastChunk.timestamp?.[1] || currentTopic.startTime;
+        }
+        topics.push(currentTopic);
+    }
+    
+    return topics;
+};
+
+// Match topic content to transcript chunks by keyword similarity
+const matchTopicToChunks = (topicText: string, transcript: TranscriptChunk[]): number[] => {
+    const keywords = topicText.toLowerCase().split(/\s+/).filter(w => w.length > 3);
+    const matched: number[] = [];
+    
+    for (let i = 0; i < transcript.length; i++) {
+        const chunkText = transcript[i].text.toLowerCase();
+        const matchCount = keywords.filter(kw => chunkText.includes(kw)).length;
+        if (matchCount >= Math.min(2, keywords.length)) {
+            matched.push(i);
+        }
+    }
+    
+    return matched;
 };
 
 const parseKeyDecisions = (decisions: KeyDecision[] | string | undefined): KeyDecision[] => {
@@ -2469,6 +2579,14 @@ class TherapyDB {
             encrypted.outline = await CryptoService.encrypt(outlineStr, pin);
         }
         
+        // Encrypt bookmarks if they exist
+        if (session.bookmarks) {
+            const bookmarksStr = typeof session.bookmarks === 'string' 
+                ? session.bookmarks 
+                : JSON.stringify(session.bookmarks);
+            encrypted.bookmarks = await CryptoService.encrypt(bookmarksStr, pin);
+        }
+        
         return encrypted;
     }
 
@@ -2511,6 +2629,15 @@ class TherapyDB {
                 decrypted.outline = await CryptoService.decrypt(session.outline, pin);
             } catch {
                 decrypted.outline = session.outline;
+            }
+        }
+        
+        // Decrypt bookmarks if they exist
+        if (session.bookmarks && typeof session.bookmarks === 'string') {
+            try {
+                decrypted.bookmarks = await CryptoService.decrypt(session.bookmarks, pin);
+            } catch {
+                decrypted.bookmarks = session.bookmarks;
             }
         }
         
@@ -3294,7 +3421,6 @@ const MainApp: React.FC<{ pin: string; authService: AuthService; onLock: () => v
     const [isLoading, setIsLoading] = useState(true);
     const [status, setStatus] = useState({ message: '', type: '' });
     const [selectedSession, setSelectedSession] = useState<Session | null>(null);
-    const [view, setView] = useState<'sessions' | 'tasks' | 'notes'>('sessions');
     const [industry, setIndustry] = useState<string>('general');
     const [language, setLanguage] = useState<string>('en');
     const [modelsReady, setModelsReady] = useState(false);
@@ -3302,6 +3428,26 @@ const MainApp: React.FC<{ pin: string; authService: AuthService; onLock: () => v
     const [showCalendarSettings, setShowCalendarSettings] = useState(false);
     const [calendarService, setCalendarService] = useState<CalendarService | null>(null);
     const [calendarConnected, setCalendarConnected] = useState(false);
+    const [sidebarMobileOpen, setSidebarMobileOpen] = useState(false);
+    const [contextRailOpen, setContextRailOpen] = useState(true);
+    const [isMobile, setIsMobile] = useState(false);
+    
+    // Handle mobile sidebar
+    useEffect(() => {
+        const checkMobile = () => {
+            const mobile = window.innerWidth <= 767;
+            setIsMobile(mobile);
+            if (!mobile) {
+                setSidebarMobileOpen(false);
+                if (!contextRailOpen) setContextRailOpen(true);
+            } else {
+                if (contextRailOpen) setContextRailOpen(false);
+            }
+        };
+        checkMobile();
+        window.addEventListener('resize', checkMobile);
+        return () => window.removeEventListener('resize', checkMobile);
+    }, []);
     
     useEffect(() => {
         // Initialize activity tracking for auto-lock
@@ -3737,136 +3883,159 @@ const MainApp: React.FC<{ pin: string; authService: AuthService; onLock: () => v
         }
     };
 
+    const handleNewNote = async () => {
+        // Create a new empty session/note and save it
+        try {
+            const newSession: Omit<Session, 'id' | 'timestamp' | 'notes'> = {
+                sessionTitle: 'Untitled Note',
+                participants: '',
+                date: new Date().toISOString().split('T')[0],
+                analysisStatus: 'none',
+                duration: 0,
+                transcript: []
+            };
+            const id = await handleAddSession(newSession, '', null);
+            if (id) {
+                // Reload sessions to get the new one
+                const allSessions = await db.getAllSessions(pin);
+                setSessions(allSessions);
+                const savedSession = allSessions.find(s => s.id === id);
+                if (savedSession) {
+                    setSelectedSession(savedSession);
+                }
+            }
+        } catch (error) {
+            showStatus('Failed to create new note.', 'error');
+        }
+        if (isMobile) {
+            setSidebarMobileOpen(false);
+        }
+    };
+
+    const handleSelectNote = (session: Session) => {
+        setSelectedSession(session);
+        if (isMobile) {
+            setSidebarMobileOpen(false);
+        }
+    };
+
+    const handleSummarize = async () => {
+        if (!selectedSession) return;
+        // Trigger AI analysis for summarization
+        if (selectedSession.id) {
+            await handleStartAnalysis(selectedSession.id);
+        }
+    };
+
+    const handleActionItems = async () => {
+        if (!selectedSession) return;
+        // Trigger AI analysis for action items
+        if (selectedSession.id) {
+            await handleStartAnalysis(selectedSession.id);
+        }
+    };
+
     return (
-        <div className="container">
-            <header>
-                <ThemeToggle />
-                <div className="logo-container">
-                    <img 
-                        src="/logo.png" 
-                        alt="MiNDS Talk Logo" 
-                        style={{ 
-                            height: '48px', 
-                            width: '48px',
-                            borderRadius: '8px',
-                            objectFit: 'contain'
-                        }} 
-                    />
-                    <div>
-                        <h1>MiNDS Talk</h1>
-                        <p>Private, secure, on‑device AI that turns every conversation into clear, searchable notes, actions and plans.</p>
-                    </div>
-                </div>
-                <p className="author-credit">by AC MiNDS.</p>
-                <div className="settings-container">
-                    <button 
-                        onClick={() => {
-                            authService.updateActivity();
-                            onLock();
-                        }}
-                        className="btn-secondary"
-                        style={{ marginRight: '10px', padding: '6px 12px', fontSize: '14px' }}
-                        title="Lock App"
-                    >
-                        🔒 Lock
-                    </button>
-                    <button 
-                        onClick={() => {
-                            authService.updateActivity();
-                            setShowCalendarSettings(true);
-                        }}
-                        className="btn-secondary"
-                        style={{ marginRight: '10px', padding: '6px 12px', fontSize: '14px' }}
-                        title="Calendar Settings"
-                    >
-                        📅 Calendar
-                    </button>
-                    <span>Purpose:</span>
-                    <select 
-                        id="industrySelector" 
-                        value={industry} 
-                        onChange={(e) => {
-                            authService.updateActivity();
-                            handleIndustryChange(e);
-                        }}
-                    >
-                        <option value="general">General</option>
-                        <option value="therapy">Therapy Session</option>
-                        <option value="medical">Medical Dictation</option>
-                        <option value="legal">Legal Note</option>
-                        <option value="business">Business Meeting</option>
-                    </select>
-                    <span>Language:</span>
-                    <select 
-                        id="languageSelector" 
-                        value={language} 
-                        onChange={(e) => {
-                            authService.updateActivity();
-                            handleLanguageChange(e);
-                        }}
-                    >
-                        <option value="en">English</option>
-                        <option value="es">Spanish</option>
-                        <option value="fr">French</option>
-                        <option value="de">German</option>
-                        <option value="it">Italian</option>
-                        <option value="pt">Portuguese</option>
-                        <option value="zh">Chinese</option>
-                        <option value="ja">Japanese</option>
-                        <option value="ko">Korean</option>
-                        <option value="ru">Russian</option>
-                        <option value="ar">Arabic</option>
-                        <option value="hi">Hindi</option>
-                    </select>
-                </div>
-            </header>
+        <div
+            className="app-layout"
+            style={{
+                display: 'flex',
+                height: '100vh',
+                width: '100%',
+                background: document.documentElement.getAttribute('data-theme') === 'dark'
+                    ? 'transparent'
+                    : '#fff',
+                overflow: 'hidden',
+                fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif'
+            }}
+        >
+            {/* Sidebar */}
+            <Sidebar
+                isOpen={!isMobile || sidebarMobileOpen}
+                onClose={() => setSidebarMobileOpen(false)}
+                onNewNote={handleNewNote}
+                onSelectNote={handleSelectNote}
+                onCalendarSettings={() => {
+                    authService.updateActivity();
+                    setShowCalendarSettings(true);
+                    if (isMobile) {
+                        setSidebarMobileOpen(false);
+                    }
+                }}
+                onLock={() => {
+                    authService.updateActivity();
+                    onLock();
+                }}
+                sessions={sessions}
+                selectedSession={selectedSession}
+                isMobile={isMobile}
+            />
 
-            {status.message && <div className={`status ${status.type}`}>{status.message}</div>}
-            
-            {modelsLoading && (
-                <div className="status info" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                    <div className="spinner" style={{ width: '16px', height: '16px', borderWidth: '2px' }}></div>
-                    Loading AI models...
-                </div>
-            )}
-            
-            {modelsReady && !modelsLoading && (
-                <div className="status success" style={{ fontSize: '0.9em', padding: '4px 12px' }}>
-                    ✓ AI models ready
+            {/* Editor Area */}
+            <EditorArea
+                selectedSession={selectedSession}
+                onSidebarToggle={() => setSidebarMobileOpen(!sidebarMobileOpen)}
+                onContextRailToggle={() => setContextRailOpen(!contextRailOpen)}
+                isContextOpen={contextRailOpen}
+                isMobile={isMobile}
+                onUpdateSession={handleUpdateSession}
+                onSummarize={handleSummarize}
+                onActionItems={handleActionItems}
+                pin={pin}
+            />
+
+            {/* Context Rail */}
+            <ContextRail
+                isOpen={!isMobile || contextRailOpen}
+                onClose={() => setContextRailOpen(false)}
+                selectedSession={selectedSession}
+                tasks={tasks}
+                sessions={sessions}
+            />
+
+            {/* Status Messages */}
+            {status.message && (
+                <div
+                    style={{
+                        position: 'fixed',
+                        bottom: '24px',
+                        right: '24px',
+                        padding: '12px 16px',
+                        borderRadius: '8px',
+                        background: status.type === 'error' ? 'rgba(239, 68, 68, 0.9)' : status.type === 'success' ? 'rgba(44, 95, 65, 0.9)' : 'rgba(2, 41, 91, 0.9)',
+                        color: '#fff',
+                        fontSize: '14px',
+                        zIndex: 1000,
+                        boxShadow: '0 4px 6px rgba(0, 0, 0, 0.1)',
+                        maxWidth: '300px'
+                    }}
+                >
+                    {status.message}
                 </div>
             )}
 
-            <ViewSwitcher view={view} setView={setView} />
-
-            {isLoading ? (
-                <div className="loading"><div className="spinner"></div>Loading...</div>
-            ) : (
-                view === 'sessions' ? (
-                    <>
-                        <NewSessionForm onAddSession={handleAddSession} onStartAnalysis={handleStartAnalysis} showStatus={showStatus} industry={industry} />
-                        <SessionsList sessions={sessions} onSelect={setSelectedSession} onDelete={handleDeleteSession} pin={pin} />
-                    </>
-                ) : view === 'tasks' ? (
-                    <TaskManager 
-                        tasks={tasks}
-                        onAddTask={handleAddTask}
-                        onUpdateTask={handleUpdateTask}
-                        onDeleteTask={handleDeleteTask}
-                        sessions={sessions}
-                    />
-                ) : (
-                    <PreviousNotesList 
-                        sessions={sessions} 
-                        tasks={tasks}
-                        onSelect={setSelectedSession} 
-                        onDelete={handleDeleteSession}
-                        onSetView={setView}
-                        pin={pin} 
-                    />
-                )
+            {/* Loading Overlay */}
+            {isLoading && (
+                <div
+                    style={{
+                        position: 'fixed',
+                        inset: 0,
+                        background: 'rgba(255, 255, 255, 0.9)',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        gap: '16px',
+                        zIndex: 2000
+                    }}
+                >
+                    <div className="spinner"></div>
+                    <div style={{ fontSize: '16px', color: '#4b5563' }}>Loading...</div>
+                </div>
             )}
 
-            {selectedSession && (
+            {/* Session Detail Modal (for audio playback, etc.) */}
+            {selectedSession && selectedSession.id && (
                 <SessionDetailModal
                     session={selectedSession}
                     onClose={() => setSelectedSession(null)}
@@ -3879,6 +4048,7 @@ const MainApp: React.FC<{ pin: string; authService: AuthService; onLock: () => v
                 />
             )}
 
+            {/* Calendar Settings Modal */}
             {showCalendarSettings && (
                 <CalendarSettings
                     onClose={() => setShowCalendarSettings(false)}
@@ -3888,28 +4058,43 @@ const MainApp: React.FC<{ pin: string; authService: AuthService; onLock: () => v
                     }}
                 />
             )}
+
+            {/* Theme Toggle - Floating */}
+            <div
+                style={{
+                    position: 'fixed',
+                    bottom: '24px',
+                    left: isMobile ? '24px' : '280px',
+                    zIndex: 100,
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '8px'
+                }}
+            >
+                {modelsLoading && (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '12px', color: '#6b7280', background: 'rgba(255, 255, 255, 0.9)', padding: '4px 8px', borderRadius: '6px', boxShadow: '0 1px 3px rgba(0, 0, 0, 0.1)' }}>
+                        <div className="spinner" style={{ width: '12px', height: '12px', borderWidth: '2px' }}></div>
+                        <span style={{ display: window.innerWidth > 640 ? 'inline' : 'none' }}>Loading AI...</span>
+                    </div>
+                )}
+                {modelsReady && !modelsLoading && (
+                    <div style={{ fontSize: '11px', color: 'var(--color-strategic-forest, #2c5f41)', fontWeight: '500', background: 'rgba(255, 255, 255, 0.9)', padding: '4px 8px', borderRadius: '6px', boxShadow: '0 1px 3px rgba(0, 0, 0, 0.1)' }}>
+                        ✓ AI Ready
+                    </div>
+                )}
+                <ThemeToggle />
+            </div>
         </div>
     );
 };
 
-const ViewSwitcher: React.FC<{ view: 'sessions' | 'tasks' | 'notes', setView: (view: 'sessions' | 'tasks' | 'notes') => void }> = ({ view, setView }) => (
-    <div className="view-switcher">
-        <button className={view === 'sessions' ? 'active' : ''} onClick={() => setView('sessions')}>Sessions</button>
-        <button className={view === 'tasks' ? 'active' : ''} onClick={() => setView('tasks')}>Tasks</button>
-        <button className={view === 'notes' ? 'active' : ''} onClick={() => setView('notes')}>History</button>
-    </div>
-);
+// ViewSwitcher removed - now handled by Sidebar component
 
 type ShowStatusType = (message: string, type: 'success' | 'error' | 'info', duration?: number) => void;
 
-const NewSessionForm: React.FC<{ 
-    onAddSession: (session: Omit<Session, 'id' | 'timestamp' | 'notes'>, notes: string, audioBlob: Blob | null) => Promise<number | null>,
-    onStartAnalysis: (sessionId: number) => Promise<void>,
-    showStatus: ShowStatusType,
-    industry: string
-}> = ({ onAddSession, onStartAnalysis, showStatus, industry }) => {
-    const [sessionTitle, setSessionTitle] = useState('');
-    const [participants, setParticipants] = useState('');
+// DEPRECATED: NewSessionForm removed - replaced by "New Note" button in Sidebar
+// Recording functionality will be moved to a modal or separate component
+// Component code removed - see git history if needed
     const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
     const [notes, setNotes] = useState('');
     const [isRecording, setIsRecording] = useState(false);
@@ -4315,132 +4500,11 @@ const NewSessionForm: React.FC<{
                         </div>
                     </div>
                 </div>
-            </form>
-        </div>
-    );
-};
+// DEPRECATED: SessionsList removed - replaced by notes list in Sidebar
+// Component code removed - see git history if needed
 
-const SessionsList: React.FC<{ sessions: Session[], onSelect: (session: Session) => void, onDelete: (id: number) => void, pin: string }> = ({ sessions, onSelect, onDelete, pin }) => {
-    const [searchQuery, setSearchQuery] = useState('');
-    const [filteredSessions, setFilteredSessions] = useState<Session[]>(sessions);
-    
-    useEffect(() => {
-        if (!searchQuery.trim()) {
-            setFilteredSessions(sessions);
-            return;
-        }
-        
-        const query = searchQuery.toLowerCase();
-        const filtered = sessions.filter(session => {
-            const titleMatch = session.sessionTitle?.toLowerCase().includes(query);
-            const participantsMatch = session.participants?.toLowerCase().includes(query);
-            const dateMatch = new Date(session.date).toLocaleDateString().toLowerCase().includes(query);
-            return titleMatch || participantsMatch || dateMatch;
-        });
-        setFilteredSessions(filtered);
-    }, [searchQuery, sessions]);
-    
-    if (sessions.length === 0) {
-        return <div className="empty-state">No sessions yet. Create one to get started!</div>;
-    }
-
-    const decryptAndPreview = (notes: string) => {
-        try {
-            // This is a simplified preview. In a real app, you might want to cache decrypted previews.
-            // For now, let's just show encrypted length as a placeholder for performance.
-            return `Encrypted notes...`;
-        } catch {
-            return "Could not decrypt preview.";
-        }
-    };
-
-    return (
-        <div className="sessions-list">
-            <div style={{ marginBottom: '16px' }}>
-                <h3>Recent Sessions</h3>
-                <input
-                    type="text"
-                    placeholder="Search sessions..."
-                    value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
-                    style={{
-                        width: '100%',
-                        padding: '8px 12px',
-                        background: 'rgba(26, 32, 51, 0.8)',
-                        border: '1px solid rgba(55, 64, 255, 0.3)',
-                        borderRadius: '6px',
-                        color: '#e2e8f0',
-                        fontSize: '1em',
-                        marginTop: '8px'
-                    }}
-                />
-            </div>
-            {filteredSessions.length === 0 && searchQuery ? (
-                <div className="empty-state">No sessions match your search.</div>
-            ) : (
-                filteredSessions.map(session => (
-                <div key={session.id} className="session-item" onClick={() => onSelect(session)}>
-                    <div className="session-content">
-                        <div className="session-header">
-                            <span className="session-title">{session.sessionTitle}</span>
-                            <span className="session-date">{new Date(session.date).toLocaleDateString()}</span>
-                        </div>
-                        {session.participants && <p className="session-participants">With: {session.participants}</p>}
-                        <p className="session-preview">{decryptAndPreview(session.notes)}</p>
-                        {session.analysisStatus && session.analysisStatus !== 'complete' && session.analysisStatus !== 'none' && (
-                            <div className={`session-status-indicator ${session.analysisStatus}`}>
-                                {session.analysisStatus === 'pending' && <><div className="spinner-small"></div> Processing AI analysis...</>}
-                                {session.analysisStatus === 'failed' && <>&#x26A0; AI analysis failed</>}
-                            </div>
-                        )}
-                    </div>
-                    <div className="session-actions">
-                        <button
-                            className="icon-btn"
-                            onClick={(e) => { e.stopPropagation(); onDelete(session.id!); }}
-                            aria-label="Delete session"
-                        >
-                           &#x1F5D1;
-                        </button>
-                    </div>
-                </div>
-                ))
-            )}
-        </div>
-    );
-};
-
-const PreviousNotesList: React.FC<{ 
-    sessions: Session[], 
-    tasks: Task[],
-    onSelect: (session: Session) => void, 
-    onDelete: (id: number) => void,
-    onSetView: (view: 'sessions' | 'tasks' | 'notes') => void,
-    pin: string 
-}> = ({ sessions, tasks, onSelect, onDelete, onSetView, pin }) => {
-    const [selectedNotesSession, setSelectedNotesSession] = useState<Session | null>(null);
-    const [searchQuery, setSearchQuery] = useState('');
-    const [filteredSessions, setFilteredSessions] = useState<Session[]>(sessions);
-    
-    useEffect(() => {
-        if (!searchQuery.trim()) {
-            setFilteredSessions(sessions);
-            return;
-        }
-        
-        const query = searchQuery.toLowerCase();
-        const filtered = sessions.filter(session => {
-            const titleMatch = session.sessionTitle?.toLowerCase().includes(query);
-            const participantsMatch = session.participants?.toLowerCase().includes(query);
-            const dateMatch = new Date(session.date).toLocaleDateString().toLowerCase().includes(query);
-            const summary = parseSummary(session.summary);
-            const summaryMatch = summary.toLowerCase().includes(query);
-            return titleMatch || participantsMatch || dateMatch || summaryMatch;
-        });
-        setFilteredSessions(filtered);
-    }, [searchQuery, sessions]);
-    
-    const handleExportSession = async (session: Session) => {
+// DEPRECATED: PreviousNotesList removed - replaced by notes navigation in Sidebar
+// Component code removed - see git history if needed
         try {
             const transcript = parseTranscript(session.transcript);
             const todoItems = parseTodoItems(session.todoItems);
@@ -4921,6 +4985,24 @@ const SessionDetailModal: React.FC<{
     const [editingSpeaker, setEditingSpeaker] = useState<{chunkIndex: number, oldName: string} | null>(null);
     const [aiAnalysisStatus, setAiAnalysisStatus] = useState<'idle' | 'in_progress' | 'failed' | 'complete'>('idle');
     const [aiProgress, setAiProgress] = useState({ status: '', progress: 0 });
+    
+    // Bookmark state
+    const [bookmarks, setBookmarks] = useState<Bookmark[]>([]);
+    const [bookmarkSaveTimeout, setBookmarkSaveTimeout] = useState<number | null>(null);
+    
+    // Search state
+    const [searchQuery, setSearchQuery] = useState('');
+    const [searchResults, setSearchResults] = useState<Array<{chunkIndex: number, matchIndex: number, matchLength: number}>>([]);
+    const [currentResultIndex, setCurrentResultIndex] = useState(0);
+    
+    // Playback sync state
+    const [currentPlaybackTime, setCurrentPlaybackTime] = useState(0);
+    const transcriptRef = useRef<HTMLDivElement>(null);
+    const activeChunkRef = useRef<HTMLDivElement>(null);
+    
+    // Topic/chapter state
+    const [topics, setTopics] = useState<Topic[]>([]);
+    const [activeTopicIndex, setActiveTopicIndex] = useState<number | null>(null);
 
     // Initialize aiAnalysisStatus based on session status when modal opens
     useEffect(() => {
@@ -4948,6 +5030,17 @@ const SessionDetailModal: React.FC<{
                     setAudioBlob(blob);
                     setAudioUrl(URL.createObjectURL(blob));
                 }
+                
+                // Load bookmarks
+                const loadedBookmarks = parseBookmarks(session.bookmarks);
+                setBookmarks(loadedBookmarks);
+                
+                // Parse topics from outline
+                const outline = parseOutline(session.outline);
+                if (outline) {
+                    const parsedTopics = parseTopicsFromOutline(outline, parseTranscript(session.transcript));
+                    setTopics(parsedTopics);
+                }
 
             } catch (error) {
                 setDecryptedNotes("Error: Could not decrypt notes. The PIN may be incorrect or data is corrupted.");
@@ -4974,6 +5067,74 @@ const SessionDetailModal: React.FC<{
         });
         setSpeakerMap(initialMap);
     }, [session.transcript]);
+    
+    // Search functions
+    const scrollToSearchResult = (index: number) => {
+        if (index < 0 || index >= searchResults.length) return;
+        
+        const result = searchResults[index];
+        const chunkElement = document.querySelector(`[data-chunk-index="${result.chunkIndex}"]`);
+        if (chunkElement) {
+            chunkElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            setCurrentResultIndex(index);
+        }
+    };
+    
+    // Search effect - debounced
+    useEffect(() => {
+        if (!searchQuery.trim()) {
+            setSearchResults([]);
+            setCurrentResultIndex(0);
+            return;
+        }
+        
+        const timeout = setTimeout(() => {
+            const transcript = parseTranscript(session.transcript);
+            const results: Array<{chunkIndex: number, matchIndex: number, matchLength: number}> = [];
+            const lowerQuery = searchQuery.toLowerCase();
+            
+            transcript.forEach((chunk, chunkIndex) => {
+                const text = chunk.text.toLowerCase();
+                let searchIndex = text.indexOf(lowerQuery);
+                while (searchIndex !== -1) {
+                    results.push({
+                        chunkIndex,
+                        matchIndex: searchIndex,
+                        matchLength: searchQuery.length
+                    });
+                    searchIndex = text.indexOf(lowerQuery, searchIndex + 1);
+                }
+            });
+            
+            setSearchResults(results);
+            const firstIndex = results.length > 0 ? 0 : -1;
+            setCurrentResultIndex(firstIndex);
+            
+            // Scroll to first result
+            if (results.length > 0) {
+                setTimeout(() => {
+                    const firstResult = results[0];
+                    const chunkElement = document.querySelector(`[data-chunk-index="${firstResult.chunkIndex}"]`);
+                    if (chunkElement) {
+                        chunkElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                    }
+                }, 100);
+            }
+        }, 300);
+        return () => clearTimeout(timeout);
+    }, [searchQuery, session.transcript]);
+    
+    // Update topics when outline changes
+    useEffect(() => {
+        const outline = parseOutline(session.outline);
+        const transcript = parseTranscript(session.transcript);
+        if (outline && transcript.length > 0) {
+            const parsedTopics = parseTopicsFromOutline(outline, transcript);
+            setTopics(parsedTopics);
+        } else {
+            setTopics([]);
+        }
+    }, [session.outline, session.transcript]);
 
     const handleSaveNotes = async () => {
         try {
@@ -4983,6 +5144,131 @@ const SessionDetailModal: React.FC<{
             setIsEditingNotes(false);
         } catch {
             alert('Failed to save notes.');
+        }
+    };
+    
+    // Bookmark functions
+    const toggleBookmark = (chunkIndex: number) => {
+        const transcript = parseTranscript(session.transcript);
+        const chunk = transcript[chunkIndex];
+        const timestamp = chunk.timestamp?.[0] || 0;
+        
+        const existingIndex = bookmarks.findIndex(b => b.chunkIndex === chunkIndex);
+        let newBookmarks: Bookmark[];
+        
+        if (existingIndex >= 0) {
+            // Remove bookmark
+            newBookmarks = bookmarks.filter((_, i) => i !== existingIndex);
+        } else {
+            // Add bookmark
+            newBookmarks = [...bookmarks, {
+                chunkIndex,
+                timestamp,
+                createdAt: Date.now()
+            }];
+        }
+        
+        setBookmarks(newBookmarks);
+        
+        // Debounced save
+        if (bookmarkSaveTimeout) {
+            window.clearTimeout(bookmarkSaveTimeout);
+        }
+        const timeout = window.setTimeout(async () => {
+            try {
+                const bookmarksStr = JSON.stringify(newBookmarks);
+                const encryptedBookmarks = await CryptoService.encrypt(bookmarksStr, pin);
+                onUpdate({ ...session, bookmarks: encryptedBookmarks, audioBlob });
+            } catch (error) {
+                console.error('Failed to save bookmarks:', error);
+            }
+        }, 500);
+        setBookmarkSaveTimeout(timeout);
+    };
+    
+    const isBookmarked = (chunkIndex: number): boolean => {
+        return bookmarks.some(b => b.chunkIndex === chunkIndex);
+    };
+    
+    const jumpToBookmark = (bookmark: Bookmark) => {
+        const chunkElement = document.querySelector(`[data-chunk-index="${bookmark.chunkIndex}"]`);
+        if (chunkElement) {
+            chunkElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+        // If audio is available, seek to timestamp
+        if (audioUrl && bookmark.timestamp > 0) {
+            const audioElement = document.querySelector('audio') as HTMLAudioElement;
+            if (audioElement) {
+                audioElement.currentTime = bookmark.timestamp;
+            }
+        }
+    };
+    
+    // Search navigation
+    const navigateSearchResults = (direction: 'next' | 'prev') => {
+        if (searchResults.length === 0) return;
+        
+        let newIndex = currentResultIndex;
+        if (direction === 'next') {
+            newIndex = (currentResultIndex + 1) % searchResults.length;
+        } else {
+            newIndex = currentResultIndex <= 0 ? searchResults.length - 1 : currentResultIndex - 1;
+        }
+        scrollToSearchResult(newIndex);
+    };
+    
+    // Playback sync functions
+    const getChunkForTime = (time: number): number => {
+        const transcript = parseTranscript(session.transcript);
+        return transcript.findIndex(chunk => {
+            const [start, end] = chunk.timestamp || [0, 0];
+            return time >= start && time < end;
+        });
+    };
+    
+    const handleTimeUpdate = (time: number) => {
+        setCurrentPlaybackTime(time);
+        
+        // Throttle scroll operations (250ms)
+        const activeChunkIndex = getChunkForTime(time);
+        if (activeChunkIndex >= 0 && transcriptRef.current) {
+            // Only scroll if chunk changed significantly
+            const lastScrollTime = (handleTimeUpdate as any).lastScrollTime || 0;
+            const now = Date.now();
+            if (now - lastScrollTime > 250) {
+                const chunkElement = document.querySelector(`[data-chunk-index="${activeChunkIndex}"][data-is-transcript-chunk]`);
+                if (chunkElement) {
+                    chunkElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                    activeChunkRef.current = chunkElement as HTMLDivElement;
+                    (handleTimeUpdate as any).lastScrollTime = now;
+                }
+            }
+        }
+    };
+    
+    const jumpToChunk = (chunkIndex: number) => {
+        const transcript = parseTranscript(session.transcript);
+        const chunk = transcript[chunkIndex];
+        if (chunk.timestamp && audioUrl) {
+            const audioElement = document.querySelector('audio') as HTMLAudioElement;
+            if (audioElement) {
+                audioElement.currentTime = chunk.timestamp[0];
+            }
+        }
+        const chunkElement = document.querySelector(`[data-chunk-index="${chunkIndex}"]`);
+        if (chunkElement) {
+            chunkElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+    };
+    
+    const jumpToTopic = (topic: Topic) => {
+        if (topic.chunkIndices.length > 0) {
+            jumpToChunk(topic.chunkIndices[0]);
+        } else if (topic.startTime > 0 && audioUrl) {
+            const audioElement = document.querySelector('audio') as HTMLAudioElement;
+            if (audioElement) {
+                audioElement.currentTime = topic.startTime;
+            }
         }
     };
 
@@ -5335,9 +5621,145 @@ const SessionDetailModal: React.FC<{
                     </div>
                 </div>
                 
+                {/* Search Bar */}
+                <div className="meeting-section search-section" style={{ padding: '12px', marginBottom: '16px' }}>
+                    <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+                        <input
+                            type="text"
+                            placeholder="Search transcript..."
+                            value={searchQuery}
+                            onChange={(e) => setSearchQuery(e.target.value)}
+                            style={{
+                                flex: 1,
+                                minWidth: '200px',
+                                padding: '8px 12px',
+                                border: '1px solid rgba(2, 41, 91, 0.3)',
+                                borderRadius: '8px',
+                                fontSize: '14px'
+                            }}
+                        />
+                        {searchQuery && (
+                            <>
+                                <button
+                                    onClick={() => setSearchQuery('')}
+                                    style={{
+                                        padding: '8px 12px',
+                                        background: 'transparent',
+                                        border: '1px solid rgba(2, 41, 91, 0.3)',
+                                        borderRadius: '8px',
+                                        cursor: 'pointer'
+                                    }}
+                                >
+                                    Clear
+                                </button>
+                                {searchResults.length > 0 && (
+                                    <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
+                                        <span style={{ fontSize: '14px', color: 'var(--color-authority-navy)' }}>
+                                            {currentResultIndex + 1} of {searchResults.length}
+                                        </span>
+                                        <button
+                                            onClick={() => navigateSearchResults('prev')}
+                                            style={{
+                                                padding: '6px 10px',
+                                                background: 'var(--color-strategic-forest)',
+                                                color: 'white',
+                                                border: 'none',
+                                                borderRadius: '6px',
+                                                cursor: 'pointer'
+                                            }}
+                                        >
+                                            ↑
+                                        </button>
+                                        <button
+                                            onClick={() => navigateSearchResults('next')}
+                                            style={{
+                                                padding: '6px 10px',
+                                                background: 'var(--color-strategic-forest)',
+                                                color: 'white',
+                                                border: 'none',
+                                                borderRadius: '6px',
+                                                cursor: 'pointer'
+                                            }}
+                                        >
+                                            ↓
+                                        </button>
+                                    </div>
+                                )}
+                            </>
+                        )}
+                    </div>
+                </div>
+                
+                {/* Chapters/Topics Sidebar */}
+                {topics.length > 0 && (
+                    <div className="meeting-section chapters-section" style={{ marginBottom: '16px' }}>
+                        <h3 style={{ marginBottom: '12px' }}>Topics</h3>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', maxHeight: '200px', overflowY: 'auto' }}>
+                            {topics.map((topic, index) => (
+                                <button
+                                    key={index}
+                                    onClick={() => jumpToTopic(topic)}
+                                    style={{
+                                        padding: '8px 12px',
+                                        textAlign: 'left',
+                                        background: activeTopicIndex === index ? 'var(--color-strategic-forest)' : 'transparent',
+                                        color: activeTopicIndex === index ? 'white' : 'var(--color-authority-navy)',
+                                        border: '1px solid rgba(2, 41, 91, 0.2)',
+                                        borderRadius: '6px',
+                                        cursor: 'pointer',
+                                        fontSize: '14px'
+                                    }}
+                                >
+                                    {topic.title}
+                                </button>
+                            ))}
+                        </div>
+                    </div>
+                )}
+                
+                {/* Bookmarks Section */}
+                {bookmarks.length > 0 && (
+                    <div className="meeting-section bookmarks-section" style={{ marginBottom: '16px' }}>
+                        <h3 style={{ marginBottom: '12px' }}>
+                            Bookmarks ({bookmarks.length})
+                        </h3>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', maxHeight: '200px', overflowY: 'auto' }}>
+                            {bookmarks.map((bookmark, index) => {
+                                const chunk = transcript[bookmark.chunkIndex];
+                                const preview = chunk?.text.substring(0, 100) + (chunk?.text.length > 100 ? '...' : '');
+                                return (
+                                    <div
+                                        key={index}
+                                        onClick={() => jumpToBookmark(bookmark)}
+                                        style={{
+                                            padding: '8px 12px',
+                                            background: 'rgba(253, 167, 0, 0.1)',
+                                            border: '1px solid rgba(253, 167, 0, 0.3)',
+                                            borderRadius: '6px',
+                                            cursor: 'pointer',
+                                            fontSize: '14px'
+                                        }}
+                                    >
+                                        <div style={{ fontWeight: 'bold', marginBottom: '4px' }}>
+                                            {formatTimestamp(bookmark.timestamp)}
+                                        </div>
+                                        <div style={{ color: 'var(--color-authority-navy)', fontSize: '13px' }}>
+                                            {preview}
+                                        </div>
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    </div>
+                )}
+                
                 {audioUrl && (
                     <div className="meeting-section">
-                        <AudioPlayer audioUrl={audioUrl} />
+                        <AudioPlayer 
+                            audioUrl={audioUrl} 
+                            transcript={transcript}
+                            onTimeUpdate={handleTimeUpdate}
+                        />
                     </div>
                 )}
 
@@ -5504,21 +5926,113 @@ const SessionDetailModal: React.FC<{
                             </button>
                         </div>
                         {transcriptExpanded && (
-                            <div className="transcript-content">
+                            <div className="transcript-content" ref={transcriptRef}>
                                 {transcript.map((chunk, index) => {
                                     const displaySpeaker = speakerMap[chunk.speaker] || chunk.speaker;
                                     const timestamp = chunk.timestamp 
                                         ? formatTimestamp(chunk.timestamp[0] || 0)
                                         : '';
+                                    const chunkIsBookmarked = isBookmarked(index);
+                                    const isActiveChunk = chunk.timestamp && currentPlaybackTime >= (chunk.timestamp[0] || 0) && currentPlaybackTime < (chunk.timestamp[1] || chunk.timestamp[0] || 0);
+                                    
+                                    // Check if this chunk matches current topic
+                                    const currentTopic = topics.find(t => t.chunkIndices.includes(index));
+                                    const isTopicStart = currentTopic && currentTopic.chunkIndices[0] === index;
+                                    
+                                    // Highlight search matches
+                                    let highlightedText = chunk.text;
+                                    if (searchQuery && searchResults.length > 0) {
+                                        const chunkResults = searchResults.filter(r => r.chunkIndex === index);
+                                        if (chunkResults.length > 0) {
+                                            const isActiveResult = currentResultIndex >= 0 && searchResults[currentResultIndex]?.chunkIndex === index;
+                                            // Simple highlighting - wrap matches
+                                            const regex = new RegExp(`(${searchQuery.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi');
+                                            highlightedText = chunk.text.replace(regex, (match) => {
+                                                const bgColor = isActiveResult ? '#fda700' : 'yellow';
+                                                return `<mark style="background: ${bgColor}; padding: 2px 0; border-radius: 2px;">${match}</mark>`;
+                                            });
+                                        }
+                                    }
+                                    
                                     return (
-                                        <div key={index} className="transcript-chunk">
-                                            <div className="transcript-meta">
-                                                <span className={`transcript-speaker ${getSpeakerClass(chunk.speaker)}`}>
-                                                    {displaySpeaker}
-                                                </span>
-                                                {timestamp && <span className="transcript-timestamp">{timestamp}</span>}
+                                        <div key={index}>
+                                            {isTopicStart && currentTopic && (
+                                                <div 
+                                                    className="topic-header"
+                                                    style={{
+                                                        padding: '12px',
+                                                        marginTop: '16px',
+                                                        marginBottom: '8px',
+                                                        background: 'rgba(44, 95, 65, 0.1)',
+                                                        borderLeft: '4px solid var(--color-strategic-forest)',
+                                                        borderRadius: '4px',
+                                                        cursor: 'pointer'
+                                                    }}
+                                                    onClick={() => jumpToTopic(currentTopic)}
+                                                >
+                                                    <h4 style={{ margin: 0, color: 'var(--color-strategic-forest)' }}>
+                                                        {currentTopic.title}
+                                                    </h4>
+                                                </div>
+                                            )}
+                                            <div 
+                                                className={`transcript-chunk ${isActiveChunk ? 'active-chunk' : ''}`}
+                                                data-chunk-index={index}
+                                                data-is-transcript-chunk
+                                                style={{
+                                                    padding: '12px',
+                                                    marginBottom: '8px',
+                                                    background: isActiveChunk ? 'rgba(253, 167, 0, 0.1)' : 'transparent',
+                                                    borderLeft: isActiveChunk ? '3px solid var(--color-achievement-gold)' : '3px solid transparent',
+                                                    borderRadius: '4px',
+                                                    cursor: chunk.timestamp ? 'pointer' : 'default',
+                                                    transition: 'all 0.2s'
+                                                }}
+                                                onClick={() => chunk.timestamp && jumpToChunk(index)}
+                                            >
+                                                <div className="transcript-meta" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+                                                    <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                                                        <span className={`transcript-speaker ${getSpeakerClass(chunk.speaker)}`}>
+                                                            {displaySpeaker}
+                                                        </span>
+                                                        {timestamp && (
+                                                            <span className="transcript-timestamp" style={{ fontSize: '12px', color: 'var(--color-authority-navy)', opacity: 0.7 }}>
+                                                                {timestamp}
+                                                            </span>
+                                                        )}
+                                                    </div>
+                                                    <button
+                                                        onClick={(e) => {
+                                                            e.stopPropagation();
+                                                            toggleBookmark(index);
+                                                        }}
+                                                        style={{
+                                                            background: 'transparent',
+                                                            border: 'none',
+                                                            cursor: 'pointer',
+                                                            fontSize: '18px',
+                                                            padding: '4px 8px',
+                                                            minWidth: '44px',
+                                                            minHeight: '44px',
+                                                            display: 'flex',
+                                                            alignItems: 'center',
+                                                            justifyContent: 'center'
+                                                        }}
+                                                        title={chunkIsBookmarked ? 'Remove bookmark' : 'Add bookmark'}
+                                                    >
+                                                        {chunkIsBookmarked ? '⭐' : '☆'}
+                                                    </button>
+                                                </div>
+                                                <div 
+                                                    className="transcript-text"
+                                                    dangerouslySetInnerHTML={{ __html: highlightedText }}
+                                                    style={{
+                                                        lineHeight: '1.6',
+                                                        fontSize: '14px',
+                                                        color: 'var(--color-authority-navy)'
+                                                    }}
+                                                />
                                             </div>
-                                            <div className="transcript-text">{chunk.text}</div>
                                         </div>
                                     );
                                 })}
@@ -5567,31 +6081,45 @@ const SessionDetailModal: React.FC<{
     );
 };
 
-const AudioPlayer: React.FC<{ audioUrl: string }> = ({ audioUrl }) => {
+const AudioPlayer: React.FC<{ 
+    audioUrl: string;
+    transcript?: TranscriptChunk[];
+    onTimeUpdate?: (time: number) => void;
+}> = ({ audioUrl, transcript, onTimeUpdate }) => {
     const audioRef = useRef<HTMLAudioElement>(null);
     const progressRef = useRef<HTMLDivElement>(null);
     const [isPlaying, setIsPlaying] = useState(false);
     const [currentTime, setCurrentTime] = useState(0);
     const [duration, setDuration] = useState(0);
+    const [playbackSpeed, setPlaybackSpeed] = useState(1);
 
     useEffect(() => {
         const audio = audioRef.current;
         if (!audio) return;
 
-        const handleTimeUpdate = () => setCurrentTime(audio.currentTime);
+        const handleTimeUpdate = () => {
+            const time = audio.currentTime;
+            setCurrentTime(time);
+            if (onTimeUpdate) {
+                onTimeUpdate(time);
+            }
+        };
         const handleDurationChange = () => setDuration(audio.duration);
         const handleEnded = () => setIsPlaying(false);
 
         audio.addEventListener('timeupdate', handleTimeUpdate);
         audio.addEventListener('durationchange', handleDurationChange);
         audio.addEventListener('ended', handleEnded);
+        
+        // Set playback speed
+        audio.playbackRate = playbackSpeed;
 
         return () => {
             audio.removeEventListener('timeupdate', handleTimeUpdate);
             audio.removeEventListener('durationchange', handleDurationChange);
             audio.removeEventListener('ended', handleEnded);
         };
-    }, []);
+    }, [onTimeUpdate, playbackSpeed]);
     
     const togglePlayPause = () => {
         if (audioRef.current) {
@@ -5631,34 +6159,57 @@ const AudioPlayer: React.FC<{ audioUrl: string }> = ({ audioUrl }) => {
     };
 
     const progressPercentage = duration > 0 ? (currentTime / duration) * 100 : 0;
+    
+    const handleSpeedChange = (speed: number) => {
+        setPlaybackSpeed(speed);
+        if (audioRef.current) {
+            audioRef.current.playbackRate = speed;
+        }
+    };
 
     return (
         <div className="player-controls">
             <audio ref={audioRef} src={audioUrl} preload="metadata"></audio>
             <div className="audio-player">
-                <button onClick={togglePlayPause} className="playback-btn">
+                <button onClick={togglePlayPause} className="playback-btn" style={{ minWidth: '44px', minHeight: '44px' }}>
                     {isPlaying ? '❚❚' : '►'}
                 </button>
                 <span className="time-display">{formatTime(currentTime)}</span>
-                <div className="progress-bar-container" ref={progressRef} onClick={handleProgressClick}>
+                <div className="progress-bar-container" ref={progressRef} onClick={handleProgressClick} style={{ flex: 1, cursor: 'pointer' }}>
                     <div className="progress-bar-background"></div>
                     <div className="progress-bar-progress" style={{ width: `${progressPercentage}%` }}></div>
                     <div className="progress-bar-thumb" style={{ left: `${progressPercentage}%` }}></div>
                 </div>
                 <span className="time-display">{formatTime(duration)}</span>
+                <div style={{ display: 'flex', gap: '4px', marginLeft: '8px' }}>
+                    {[0.5, 1, 1.5, 2].map(speed => (
+                        <button
+                            key={speed}
+                            onClick={() => handleSpeedChange(speed)}
+                            style={{
+                                padding: '4px 8px',
+                                fontSize: '12px',
+                                background: playbackSpeed === speed ? 'var(--color-achievement-gold)' : 'transparent',
+                                color: playbackSpeed === speed ? 'white' : 'var(--color-authority-navy)',
+                                border: '1px solid rgba(2, 41, 91, 0.3)',
+                                borderRadius: '4px',
+                                cursor: 'pointer',
+                                minWidth: '44px',
+                                minHeight: '44px'
+                            }}
+                        >
+                            {speed}x
+                        </button>
+                    ))}
+                </div>
             </div>
         </div>
     );
 };
+*/
 
-const TaskManager: React.FC<{
-    tasks: Task[],
-    onAddTask: (task: Omit<Task, 'id' | 'timestamp'>) => Promise<boolean>,
-    onUpdateTask: (task: Task) => void,
-    onDeleteTask: (id: number) => void,
-    sessions: Session[],
-}> = ({ tasks, onAddTask, onUpdateTask, onDeleteTask, sessions }) => {
-    const [filteredSessionId, setFilteredSessionId] = useState<number | null>(null);
+// DEPRECATED: TaskManager removed - replaced by action items display in ContextRail
+// Component code removed - see git history if needed
     
     useEffect(() => {
         const handleFilterTasks = (event: CustomEvent) => {
@@ -5760,39 +6311,8 @@ const TaskManager: React.FC<{
     );
 };
 
-const TaskItem: React.FC<{
-    task: Task,
-    onUpdateTask: (task: Task) => void,
-    onDeleteTask: (id: number) => void,
-}> = ({ task, onUpdateTask, onDeleteTask }) => {
-
-    const handleStatusChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
-        onUpdateTask({ ...task, status: e.target.value as any });
-    };
-
-    return (
-        <div className={`task-item status-${task.status}`}>
-            <div className="task-main-content">
-                <div className="task-details">
-                    <span className="task-title">{task.title}</span>
-                    <div className="task-meta">
-                        <span className={`priority-badge priority-${task.priority}`}>{task.priority}</span>
-                        {task.dueDate && <span>Due: {new Date(task.dueDate).toLocaleDateString()}</span>}
-                        {task.sessionName && <span className="task-session-link">From: {task.sessionName}</span>}
-                    </div>
-                </div>
-            </div>
-            <select id={`task-status-${task.id}`} name={`taskStatus-${task.id}`} className="task-status-selector" value={task.status} onChange={handleStatusChange}>
-                <option value="todo">To Do</option>
-                <option value="inprogress">In Progress</option>
-                <option value="done">Done</option>
-            </select>
-            <div className="task-actions">
-                <button className="icon-btn-delete" onClick={() => onDeleteTask(task.id!)} aria-label="Delete task">&#x1F5D1;</button>
-            </div>
-        </div>
-    );
-};
+// DEPRECATED: TaskItem removed - part of TaskManager
+// Component code removed - see git history if needed
 
 // App component is now rendered from index.tsx entry point
 export default App;

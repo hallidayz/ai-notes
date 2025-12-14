@@ -12,18 +12,22 @@ export class OutlookCalendarService extends CalendarService {
 
     constructor(clientId?: string) {
         super('outlook');
-        this.clientId = clientId || '';
+        // Get client ID from parameter, localStorage, or environment variable
+        this.clientId = clientId || 
+            (typeof window !== 'undefined' ? localStorage.getItem('oauth_outlook_client_id') : null) ||
+            import.meta.env.VITE_OUTLOOK_CLIENT_ID || 
+            '';
         this.redirectUri = typeof window !== 'undefined'
             ? `${window.location.origin}/oauth/outlook/callback`
             : '';
     }
 
     /**
-     * Connect to Outlook Calendar via OAuth 2.0
+     * Connect to Outlook Calendar via OAuth 2.0 using popup
      */
     async connect(): Promise<void> {
         if (!this.clientId) {
-            throw new Error('Outlook Calendar client ID not configured. Please set up Azure App Registration.');
+            throw new Error('Outlook Calendar client ID not configured. Please contact support.');
         }
 
         // Check if already connected
@@ -33,9 +37,81 @@ export class OutlookCalendarService extends CalendarService {
             return;
         }
 
-        // Start OAuth flow
-        const authUrl = this.buildAuthUrl();
-        window.location.href = authUrl;
+        // Start OAuth flow with popup
+        return new Promise((resolve, reject) => {
+            const authUrl = this.buildAuthUrl();
+            const width = 500;
+            const height = 600;
+            const left = (window.screen.width - width) / 2;
+            const top = (window.screen.height - height) / 2;
+            
+            const popup = window.open(
+                authUrl,
+                'Microsoft Login',
+                `width=${width},height=${height},left=${left},top=${top},toolbar=no,menubar=no,scrollbars=yes,resizable=yes`
+            );
+
+            if (!popup) {
+                reject(new Error('Popup blocked. Please allow popups for this site.'));
+                return;
+            }
+
+            // Listen for postMessage from callback page
+            let resolved = false;
+            const messageHandler = (event: MessageEvent) => {
+                // Verify origin for security
+                if (event.origin !== window.location.origin) {
+                    return;
+                }
+
+                if (event.data.type === 'oauth-success' && event.data.provider === 'outlook') {
+                    resolved = true;
+                    window.removeEventListener('message', messageHandler);
+                    clearInterval(checkPopup);
+                    if (!popup.closed) {
+                        popup.close();
+                    }
+                    
+                    const code = event.data.code;
+                    if (code) {
+                        this.handleCallback(code)
+                            .then(() => resolve())
+                            .catch(reject);
+                    } else {
+                        reject(new Error('No authorization code received'));
+                    }
+                } else if (event.data.type === 'oauth-error') {
+                    resolved = true;
+                    window.removeEventListener('message', messageHandler);
+                    clearInterval(checkPopup);
+                    if (!popup.closed) {
+                        popup.close();
+                    }
+                    reject(new Error(event.data.error || 'Authentication failed'));
+                }
+            };
+
+            window.addEventListener('message', messageHandler);
+
+            // Also check if popup was closed manually (before receiving message)
+            const checkPopup = setInterval(() => {
+                if (popup.closed && !resolved) {
+                    resolved = true;
+                    clearInterval(checkPopup);
+                    window.removeEventListener('message', messageHandler);
+                    reject(new Error('Authentication cancelled'));
+                }
+            }, 100);
+
+            // Timeout after 5 minutes
+            setTimeout(() => {
+                if (!popup.closed) {
+                    popup.close();
+                }
+                clearInterval(checkPopup);
+                reject(new Error('Authentication timeout'));
+            }, 300000);
+        });
     }
 
     /**
@@ -91,7 +167,11 @@ export class OutlookCalendarService extends CalendarService {
      * NOTE: This should be done server-side in production!
      */
     private async exchangeCodeForTokens(code: string): Promise<any> {
-        const response = await fetch('/api/oauth/outlook/token', {
+        // Use proxy in development, full URL in production
+        const apiUrl = import.meta.env.DEV 
+            ? '/api/oauth/outlook/token'  // Vite proxy handles this
+            : `${import.meta.env.VITE_API_URL || 'http://localhost:4000'}/api/oauth/outlook/token`;
+        const response = await fetch(apiUrl, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ code, redirect_uri: this.redirectUri })
@@ -135,7 +215,11 @@ export class OutlookCalendarService extends CalendarService {
         }
 
         try {
-            const response = await fetch('/api/oauth/outlook/refresh', {
+            // Use proxy in development, full URL in production
+            const apiUrl = import.meta.env.DEV 
+                ? '/api/oauth/outlook/refresh'  // Vite proxy handles this
+                : `${import.meta.env.VITE_API_URL || 'http://localhost:4000'}/api/oauth/outlook/refresh`;
+            const response = await fetch(apiUrl, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ refresh_token: this.credentials.refreshToken })

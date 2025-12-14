@@ -1,13 +1,13 @@
 {
   "name": "MiNDS Talk",
-  "short_name": "MiNDS Talk",
+  "short_name": "MiNDS",
   "description": "Private, secure, on‑device AI that turns every conversation into clear, searchable notes, actions and plans.",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
   "background_color": "#1b3448",
   "theme_color": "#02295b",
-  "orientation": "any",
+  "orientation": "portrait-primary",
   "icons": [
     {
       "src": "/icon-192.png",
@@ -27,6 +27,21 @@
       "type": "image/x-icon",
       "purpose": "any"
     }
-  ]
+  ],
+  "shortcuts": [
+    {
+      "name": "New Session",
+      "short_name": "New",
+      "description": "Start a new recording session",
+      "url": "/?action=new",
+      "icons": [
+        {
+          "src": "/icon-192.png",
+          "sizes": "192x192"
+        }
+      ]
+    }
+  ],
+  "categories": ["productivity", "business"]
 }
 

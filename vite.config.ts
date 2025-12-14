@@ -198,6 +198,13 @@ export default defineConfig(({ mode }) => {
             });
           },
         },
+        // Proxy OAuth API requests to backend
+        '^/api/oauth': {
+          target: process.env.VITE_API_URL || 'http://localhost:4000',
+          changeOrigin: true,
+          secure: false,
+          ws: false,
+        },
       },
     },
     plugins: [react(), contentTypeFixPlugin()],

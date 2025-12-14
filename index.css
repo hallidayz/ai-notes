@@ -4,13 +4,82 @@
     box-sizing: border-box;
 }
 
+/* MiNDS Talk Design Tokens */
+:root {
+    /* Spacing Scale */
+    --space-xs: 4px;
+    --space-sm: 8px;
+    --space-md: 16px;
+    --space-lg: 24px;
+    --space-xl: 32px;
+    
+    /* Typography Scale */
+    --text-xs: 0.75rem;
+    --text-sm: 0.875rem;
+    --text-base: 1rem;
+    --text-lg: 1.125rem;
+    --text-xl: 1.25rem;
+    --text-2xl: 1.5rem;
+    
+    /* MiNDS Talk Brand Colors - Light Mode */
+    --color-authority-navy: #02295b;        /* Primary brand, headers, trust */
+    --color-achievement-gold: #fda700;      /* CTAs, success, highlights */
+    --color-strategic-forest: #2c5f41;      /* Growth, creativity, innovation */
+    --color-pure-foundation: #f6f7f9;       /* Backgrounds, clarity */
+    
+    /* Semantic Colors (using brand palette) */
+    --color-primary: var(--color-authority-navy);
+    --color-accent: var(--color-achievement-gold);
+    --color-success: var(--color-strategic-forest);
+    --color-error: #ef4444;                 /* Keep for errors */
+    --color-warning: var(--color-achievement-gold);
+    
+    /* Shadows - Elevation (using Authority Navy for depth) */
+    --shadow-sm: 0 1px 2px rgba(2, 41, 91, 0.05);
+    --shadow-md: 0 4px 6px rgba(2, 41, 91, 0.1);
+    --shadow-lg: 0 10px 15px rgba(2, 41, 91, 0.1);
+    --shadow-xl: 0 20px 25px rgba(2, 41, 91, 0.15);
+    
+    /* Border Radius */
+    --radius-sm: 4px;
+    --radius-md: 8px;
+    --radius-lg: 12px;
+    --radius-xl: 16px;
+    
+    /* Transitions */
+    --transition-fast: 150ms ease;
+    --transition-base: 200ms ease;
+    --transition-slow: 300ms ease;
+}
+
+/* Dark Mode Brand Colors */
+[data-theme="dark"] {
+    --color-achievement-gold: #fda700;      /* Consistent across modes */
+    --color-success-forest: #4a6741;        /* Growth, achievement states */
+    --color-creative-depth: #6b4e71;         /* Innovation, creativity */
+    --color-executive-depth: #1b3448;       /* Backgrounds, premium depth */
+    
+    /* Override semantic colors for dark mode */
+    --color-primary: var(--color-executive-depth);
+    --color-accent: var(--color-achievement-gold);
+    --color-success: var(--color-success-forest);
+    
+    /* Shadows adjusted for dark mode */
+    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
+    --shadow-md: 0 4px 6px rgba(0, 0, 0, 0.4);
+    --shadow-lg: 0 10px 15px rgba(0, 0, 0, 0.5);
+    --shadow-xl: 0 20px 25px rgba(0, 0, 0, 0.6);
+}
+
 /* Light Mode (default) */
 body {
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-    background: #f6f7f9;
-    color: #02295b;
+    background: #fafbfc;
+    color: var(--color-authority-navy);
     min-height: 100vh;
-    padding: 20px;
+    padding: 0;
+    margin: 0;
+    overflow-x: hidden;
 }
 
 /* Dark Mode */
@@ -24,8 +93,128 @@ body {
     margin: 0 auto;
 }
 
-/* Light Mode Header */
+/* App Layout - 3 Column Layout (Sidebar + Editor + Context Rail) */
+.app-layout {
+    display: flex;
+    height: 100vh;
+    width: 100%;
+    background: #fff;
+    overflow: hidden;
+}
+
+/* Dark Mode App Layout */
+[data-theme="dark"] .app-layout {
+    background: transparent;
+}
+
+/* Sidebar Styles */
+.app-sidebar {
+    position: fixed;
+    left: 0;
+    top: 0;
+    height: 100vh;
+    background: white;
+    border-right: 1px solid rgba(0, 0, 0, 0.06);
+    z-index: 100;
+    overflow-y: auto;
+    overflow-x: hidden;
+}
+
+/* Dark Mode Sidebar */
+[data-theme="dark"] .app-sidebar {
+    background: rgba(27, 52, 72, 0.95);
+    border-right: 1px solid rgba(255, 255, 255, 0.1);
+    box-shadow: 2px 0 8px rgba(0, 0, 0, 0.3);
+}
+
+.app-sidebar::-webkit-scrollbar {
+    width: 6px;
+}
+
+.app-sidebar::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+[data-theme="dark"] .app-sidebar::-webkit-scrollbar-track {
+    background: rgba(27, 52, 72, 0.5);
+}
+
+.app-sidebar::-webkit-scrollbar-thumb {
+    background: rgba(0, 0, 0, 0.2);
+    border-radius: 3px;
+}
+
+[data-theme="dark"] .app-sidebar::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.2);
+}
+
+.app-sidebar::-webkit-scrollbar-thumb:hover {
+    background: rgba(0, 0, 0, 0.3);
+}
+
+[data-theme="dark"] .app-sidebar::-webkit-scrollbar-thumb:hover {
+    background: rgba(255, 255, 255, 0.3);
+}
+
+/* Main Content Area - DEPRECATED (replaced by EditorArea component) */
+.main-content {
+    flex: 1;
+    margin-left: 260px;
+    transition: margin-left 0.2s ease;
+    min-width: 0;
+    display: flex;
+    flexDirection: column;
+    background: #fafbfc;
+}
+
+/* Dark Mode Main Content */
+[data-theme="dark"] .main-content {
+    background: transparent;
+}
+
+.main-content.sidebar-collapsed {
+    margin-left: 64px;
+}
+
+/* Top Bar - DEPRECATED (replaced by EditorArea header) */
+.top-bar {
+    background: white;
+    border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+    padding: 16px 24px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+}
+
+/* Dark Mode Top Bar */
+[data-theme="dark"] .top-bar {
+    background: rgba(27, 52, 72, 0.95);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+    color: #e2e8f0;
+}
+
+[data-theme="dark"] .top-bar h1 {
+    color: #fda700;
+}
+
+/* Content Area - DEPRECATED (replaced by EditorArea) */
+.content-area {
+    flex: 1;
+    overflow-y: auto;
+    padding: 24px;
+    max-width: 1200px;
+    width: 100%;
+    margin: 0 auto;
+}
+
+/* Light Mode Header - Hidden in new sidebar layout */
 header {
+    display: none; /* Hidden in new sidebar layout */
     text-align: center;
     margin-bottom: 20px;
     padding: 20px;
@@ -63,28 +252,28 @@ header .logo-container p {
     margin: 0;
 }
 
-/* Theme Toggle Button */
+/* Theme Toggle Button - Updated for top bar */
 .theme-toggle {
-    position: absolute;
-    top: 20px;
-    right: 20px;
+    position: relative;
     background: transparent;
-    border: 1px solid rgba(2, 41, 91, 0.3);
-    border-radius: 8px;
-    padding: 8px 12px;
+    border: 1px solid rgba(0, 0, 0, 0.1);
+    border-radius: 6px;
+    padding: 8px;
     cursor: pointer;
-    font-size: 1.2em;
-    transition: all 0.3s;
+    font-size: 18px;
+    transition: all 0.15s;
     display: flex;
     align-items: center;
     justify-content: center;
-    width: 40px;
-    height: 40px;
+    width: 36px;
+    height: 36px;
+    color: #6b7280;
 }
 
 .theme-toggle:hover {
-    background: rgba(2, 41, 91, 0.1);
-    border-color: rgba(2, 41, 91, 0.5);
+    background: rgba(0, 0, 0, 0.05);
+    border-color: rgba(0, 0, 0, 0.15);
+    color: #1a1a1a;
 }
 
 .theme-toggle-icon {
@@ -94,12 +283,14 @@ header .logo-container p {
 
 /* Dark Mode Theme Toggle */
 [data-theme="dark"] .theme-toggle {
-    border: 1px solid rgba(255, 255, 255, 0.2);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    color: #9ca3af;
 }
 
 [data-theme="dark"] .theme-toggle:hover {
-    background: rgba(255, 255, 255, 0.1);
-    border-color: rgba(255, 255, 255, 0.3);
+    background: rgba(255, 255, 255, 0.05);
+    border-color: rgba(255, 255, 255, 0.2);
+    color: #e5e7eb;
 }
 
 /* Light Mode Headings */
@@ -214,9 +405,9 @@ h2, h3 {
     margin-top: 16px;
 }
 
-/* Light Mode View Switcher */
+/* Light Mode View Switcher - Hidden in new sidebar layout */
 .view-switcher {
-    display: flex;
+    display: none; /* Hidden - navigation now in sidebar */
     justify-content: center;
     margin-bottom: 20px;
     background: rgba(255, 255, 255, 0.8);
@@ -262,14 +453,19 @@ h2, h3 {
     color: white;
 }
 
-/* Light Mode Card */
+/* Light Mode Card - Obsidian/Notion style */
 .card {
     background: white;
-    border-radius: 12px;
-    padding: 24px;
-    margin-bottom: 20px;
-    border: 1px solid rgba(2, 41, 91, 0.1);
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+    border-radius: '8px';
+    padding: 20px;
+    margin-bottom: 16px;
+    border: 1px solid rgba(0, 0, 0, 0.06);
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+    transition: 'all 0.15s ease';
+}
+
+.card:hover {
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
 }
 
 /* Dark Mode Card */
@@ -627,23 +823,41 @@ button {
     color: #93c5fd;
 }
 
+/* Sessions List - Mobile Optimized */
 .sessions-list {
     display: grid;
+    grid-template-columns: 1fr;
     gap: 12px;
 }
 
-/* Light Mode Session Item */
+/* Tablet: 2 columns */
+@media (min-width: 768px) {
+    .sessions-list {
+        grid-template-columns: repeat(2, 1fr);
+    }
+}
+
+/* Desktop: 3 columns */
+@media (min-width: 1024px) {
+    .sessions-list {
+        grid-template-columns: repeat(3, 1fr);
+    }
+}
+
+/* Light Mode Session Item - DEPRECATED (may still be used in modals) */
 .session-item {
     background: white;
     padding: 16px;
-    border-radius: 8px;
+    border-radius: var(--radius-md);
     border: 1px solid rgba(2, 41, 91, 0.1);
     cursor: pointer;
-    transition: all 0.3s;
+    transition: all var(--transition-base);
     display: flex;
     justify-content: space-between;
     align-items: start;
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+    box-shadow: var(--shadow-sm);
+    min-height: 44px; /* Touch-friendly */
+    -webkit-tap-highlight-color: transparent;
 }
 
 .session-item:hover {
@@ -769,7 +983,8 @@ button {
     left: 0;
     width: 100%;
     height: 100%;
-    background: rgba(0, 0, 0, 0.8);
+    background: rgba(0, 0, 0, 0.4);
+    backdrop-filter: blur(4px);
     z-index: 1000;
     padding: 20px;
     overflow-y: auto;
@@ -781,17 +996,35 @@ button {
     justify-content: center;
 }
 
-/* Light Mode Modal Content */
+/* Modal Overlay - Obsidian/Notion style */
+.modal-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.4);
+    backdrop-filter: blur(4px);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+    padding: 20px;
+}
+
+/* Light Mode Modal Content - Obsidian/Notion style */
 .modal-content {
     background: white;
     border-radius: 12px;
-    padding: 32px;
+    padding: 0;
     max-width: 800px;
     width: 100%;
     max-height: 90vh;
-    overflow-y: auto;
+    overflow: hidden;
     position: relative;
-    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.15), 0 0 0 1px rgba(0, 0, 0, 0.05);
+    display: flex;
+    flex-direction: column;
 }
 
 /* Dark Mode Modal Content */
@@ -1954,21 +2187,22 @@ button {
 }
 
 .note-card {
-    background: var(--bg-secondary);
-    border: 1px solid var(--border-color);
-    border-radius: 12px;
+    background: white;
+    border: 1px solid rgba(0, 0, 0, 0.06);
+    border-radius: 8px;
     padding: 20px;
     cursor: pointer;
-    transition: all 0.2s ease;
+    transition: all 0.15s ease;
     display: flex;
     flex-direction: column;
     gap: 12px;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
 }
 
 .note-card:hover {
-    transform: translateY(-2px);
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
-    border-color: var(--accent-primary);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+    border-color: rgba(2, 41, 91, 0.15);
+    background: #fafbfc;
 }
 
 .note-card-header {
@@ -2388,6 +2622,385 @@ button {
 
 [data-theme="dark"] .transcript-content {
     background: rgba(26, 32, 51, 0.4);
+}
+
+/* New UI/UX Features Styles */
+
+/* Search Section */
+.search-section {
+    background: rgba(255, 255, 255, 0.5);
+    border-radius: var(--radius-md);
+}
+
+[data-theme="dark"] .search-section {
+    background: rgba(27, 52, 72, 0.5);
+}
+
+/* Bookmarks Section */
+.bookmarks-section {
+    background: rgba(253, 167, 0, 0.05);
+    border: 1px solid rgba(253, 167, 0, 0.2);
+    border-radius: var(--radius-md);
+}
+
+[data-theme="dark"] .bookmarks-section {
+    background: rgba(253, 167, 0, 0.1);
+    border-color: rgba(253, 167, 0, 0.3);
+}
+
+/* Chapters/Topics Section */
+.chapters-section {
+    background: rgba(44, 95, 65, 0.05);
+    border: 1px solid rgba(44, 95, 65, 0.2);
+    border-radius: var(--radius-md);
+}
+
+[data-theme="dark"] .chapters-section {
+    background: rgba(74, 103, 65, 0.1);
+    border-color: rgba(74, 103, 65, 0.3);
+}
+
+/* Topic Header */
+.topic-header {
+    transition: all var(--transition-base);
+}
+
+.topic-header:hover {
+    background: rgba(44, 95, 65, 0.15) !important;
+}
+
+[data-theme="dark"] .topic-header {
+    background: rgba(74, 103, 65, 0.15);
+}
+
+[data-theme="dark"] .topic-header:hover {
+    background: rgba(74, 103, 65, 0.25) !important;
+}
+
+/* Active Chunk Highlighting */
+.transcript-chunk.active-chunk {
+    background: rgba(253, 167, 0, 0.15) !important;
+    border-left-color: var(--color-achievement-gold) !important;
+    box-shadow: 0 2px 8px rgba(253, 167, 0, 0.2);
+}
+
+[data-theme="dark"] .transcript-chunk.active-chunk {
+    background: rgba(253, 167, 0, 0.2) !important;
+}
+
+/* Search Highlight */
+.transcript-text mark {
+    background: yellow;
+    padding: 2px 0;
+    border-radius: 2px;
+}
+
+[data-theme="dark"] .transcript-text mark {
+    background: var(--color-achievement-gold);
+    color: var(--color-authority-navy);
+}
+
+/* Touch-friendly targets */
+button, a, input, select {
+    min-height: 44px;
+    min-width: 44px;
+}
+
+/* Prevent text selection on interactive elements */
+button, .clickable {
+    -webkit-tap-highlight-color: transparent;
+    user-select: none;
+}
+
+/* Smooth scrolling */
+html {
+    scroll-behavior: smooth;
+    -webkit-overflow-scrolling: touch;
+}
+
+/* Safe area insets for notched devices */
+.container {
+    padding-left: env(safe-area-inset-left);
+    padding-right: env(safe-area-inset-right);
+}
+
+/* Mobile Optimizations */
+@media (max-width: 767px) {
+    body {
+        padding: 0;
+    }
+    
+    .container {
+        max-width: 100%;
+    }
+    
+    /* Sidebar becomes drawer on mobile */
+    .app-sidebar {
+        transform: translateX(-100%);
+        transition: transform 0.3s ease;
+        box-shadow: 2px 0 8px rgba(0, 0, 0, 0.15);
+        width: 260px !important;
+        minWidth: 260px !important;
+    }
+    
+    .app-sidebar.mobile-open {
+        transform: translateX(0);
+    }
+    
+    .sidebar-overlay {
+        display: block !important;
+    }
+    
+    .main-content {
+        margin-left: 0 !important;
+    }
+    
+    .main-content.sidebar-collapsed {
+        margin-left: 0 !important;
+    }
+    
+    /* Hide desktop collapse button on mobile */
+    .top-bar button[title="Collapse sidebar"],
+    .top-bar button[title="Expand sidebar"] {
+        display: none !important;
+    }
+    
+    /* Show mobile menu button */
+    .top-bar button[title="Menu"] {
+        display: flex !important;
+    }
+    
+    .top-bar {
+        padding: 12px 16px !important;
+    }
+    
+    .content-area {
+        padding: 16px !important;
+    }
+    
+    header {
+        padding: 16px;
+        text-align: left;
+    }
+    
+    header .logo-container {
+        flex-direction: column;
+        gap: 12px;
+        align-items: flex-start;
+    }
+    
+    header .logo-container h1 {
+        font-size: 1.5em;
+    }
+    
+    header .logo-container p {
+        font-size: 0.9em;
+    }
+    
+    .settings-container {
+        flex-direction: column;
+        gap: 8px;
+        align-items: stretch;
+        margin-top: 12px;
+    }
+    
+    .settings-container > * {
+        width: 100%;
+    }
+    
+    .settings-container button {
+        width: 100%;
+        margin-right: 0 !important;
+    }
+    
+    .theme-toggle {
+        top: 12px;
+        right: 12px;
+        width: 44px;
+        height: 44px;
+    }
+    
+    .modal-overlay {
+        padding: 0;
+        align-items: flex-end;
+    }
+    
+    .modal-content {
+        max-width: 100%;
+        margin: 0;
+        border-radius: 16px 16px 0 0;
+        max-height: 90vh;
+        overflow-y: auto;
+        box-shadow: 0 -4px 24px rgba(0, 0, 0, 0.15);
+    }
+    
+    .modal-header {
+        padding: 20px 20px 0 20px !important;
+    }
+    
+    .modal-body {
+        padding: 24px 20px !important;
+    }
+    
+    .modal-footer {
+        padding: 16px 20px !important;
+    }
+    
+    .transcript-chunk {
+        padding: 16px 12px;
+    }
+    
+    .search-section {
+        padding: 12px !important;
+    }
+    
+    .search-section input {
+        width: 100%;
+    }
+    
+    .chapters-section,
+    .bookmarks-section {
+        max-height: 150px;
+    }
+    
+    .player-controls {
+        flex-wrap: wrap;
+    }
+    
+    .audio-player {
+        flex-wrap: wrap;
+        gap: 8px;
+    }
+    
+    .sessions-list {
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+    }
+    
+    .note-card {
+        padding: 16px;
+        min-height: auto;
+    }
+    
+    .notes-column-layout {
+        grid-template-columns: 1fr;
+        gap: 12px;
+    }
+    
+    .meeting-section {
+        padding: 16px;
+        margin-bottom: 16px;
+    }
+    
+    .transcript-content {
+        padding: 12px;
+    }
+    
+    .transcript-chunk {
+        padding: 12px 8px;
+    }
+    
+    /* Calendar Connect Card Mobile */
+    .calendar-connect-card {
+        padding: 32px 20px !important;
+    }
+    
+    .calendar-connect-card h2 {
+        font-size: 22px !important;
+    }
+    
+    .calendar-connect-card > div:first-child {
+        margin-bottom: 28px !important;
+    }
+    
+    .calendar-connect-card > div:first-child > div:first-child {
+        width: 48px !important;
+        height: 48px !important;
+        margin-bottom: 16px !important;
+    }
+    
+    .calendar-connect-card button {
+        padding: 14px 16px !important;
+        font-size: 15px !important;
+    }
+}
+
+/* Tablet Optimizations */
+@media (min-width: 768px) and (max-width: 1023px) {
+    .container {
+        max-width: 100%;
+        padding: 0 16px;
+    }
+    
+    .modal-content {
+        max-width: 90%;
+    }
+}
+
+/* Reduced Motion Support */
+@media (prefers-reduced-motion: reduce) {
+    * {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+    }
+    
+    html {
+        scroll-behavior: auto;
+    }
+}
+
+/* Additional Mobile Touch Optimizations */
+@media (max-width: 767px) {
+    /* Larger tap targets for mobile */
+    .btn-primary,
+    .btn-secondary,
+    .btn-ai,
+    .btn-danger {
+        min-height: 48px;
+        padding: 12px 16px;
+        font-size: 16px; /* Prevents zoom on iOS */
+    }
+    
+    /* Better spacing for mobile */
+    .meeting-section {
+        margin-bottom: 20px;
+    }
+    
+    /* Full-width inputs on mobile */
+    input[type="text"],
+    input[type="date"],
+    textarea,
+    select {
+        font-size: 16px; /* Prevents zoom on iOS */
+        width: 100%;
+        box-sizing: border-box;
+    }
+    
+    /* Better modal on mobile */
+    .modal-content {
+        border-radius: 0;
+        height: 100vh;
+        max-height: 100vh;
+        overflow-y: auto;
+    }
+    
+    /* Improved transcript readability on mobile */
+    .transcript-text {
+        font-size: 15px;
+        line-height: 1.7;
+    }
+    
+    /* Better button spacing */
+    .action-buttons {
+        flex-direction: column;
+    }
+    
+    .action-buttons button {
+        width: 100%;
+        margin: 4px 0;
+    }
 }
 
 /* Notes View Modal */
