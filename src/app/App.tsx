@@ -3432,6 +3432,12 @@ const MainApp: React.FC<{ pin: string; authService: AuthService; onLock: () => v
     const [contextRailOpen, setContextRailOpen] = useState(true);
     const [isMobile, setIsMobile] = useState(false);
     
+    // Use ref to store latest contextRailOpen value to avoid stale closures
+    const contextRailOpenRef = useRef(contextRailOpen);
+    useEffect(() => {
+        contextRailOpenRef.current = contextRailOpen;
+    }, [contextRailOpen]);
+    
     // Handle mobile sidebar
     useEffect(() => {
         const checkMobile = () => {
@@ -3439,15 +3445,16 @@ const MainApp: React.FC<{ pin: string; authService: AuthService; onLock: () => v
             setIsMobile(mobile);
             if (!mobile) {
                 setSidebarMobileOpen(false);
-                if (!contextRailOpen) setContextRailOpen(true);
+                // Use ref to get current value without causing effect re-runs
+                if (!contextRailOpenRef.current) setContextRailOpen(true);
             } else {
-                if (contextRailOpen) setContextRailOpen(false);
+                if (contextRailOpenRef.current) setContextRailOpen(false);
             }
         };
         checkMobile();
         window.addEventListener('resize', checkMobile);
         return () => window.removeEventListener('resize', checkMobile);
-    }, [contextRailOpen]);
+    }, []);
     
     useEffect(() => {
         // Initialize activity tracking for auto-lock
