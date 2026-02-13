@@ -2395,10 +2395,14 @@ interface Task {
 
 // --- CRYPTO SERVICE ---
 class CryptoService {
-    private static readonly SALT = 'a-very-secure-static-salt-for-whisper-notes'; // In a real app, this might be user-specific
+    private static readonly OLD_SALT = 'a-very-secure-static-salt-for-whisper-notes';
     private static readonly ITERATIONS = 100000;
+    private static readonly SALT_LENGTH = 16;
+    private static readonly IV_LENGTH = 12;
+    // Marker to identify the new secure format: 'WNS1'
+    private static readonly MARKER = new Uint8Array([0x57, 0x4e, 0x53, 0x31]);
 
-    private static async deriveKey(pin: string): Promise<CryptoKey> {
+    private static async deriveKey(pin: string, salt: Uint8Array): Promise<CryptoKey> {
         const enc = new TextEncoder();
         const keyMaterial = await window.crypto.subtle.importKey(
             'raw',
@@ -2410,7 +2414,7 @@ class CryptoService {
         return window.crypto.subtle.deriveKey(
             {
                 name: 'PBKDF2',
-                salt: enc.encode(this.SALT),
+                salt: salt,
                 iterations: this.ITERATIONS,
                 hash: 'SHA-256',
             },
@@ -2422,8 +2426,9 @@ class CryptoService {
     }
 
     public static async encrypt(data: string, pin: string): Promise<string> {
-        const key = await this.deriveKey(pin);
-        const iv = window.crypto.getRandomValues(new Uint8Array(12));
+        const salt = window.crypto.getRandomValues(new Uint8Array(this.SALT_LENGTH));
+        const key = await this.deriveKey(pin, salt);
+        const iv = window.crypto.getRandomValues(new Uint8Array(this.IV_LENGTH));
         const enc = new TextEncoder();
         const encoded = enc.encode(data);
         const encryptedContent = await window.crypto.subtle.encrypt(
@@ -2435,20 +2440,50 @@ class CryptoService {
             encoded
         );
 
-        const encryptedBytes = new Uint8Array(iv.length + encryptedContent.byteLength);
-        encryptedBytes.set(iv, 0);
-        encryptedBytes.set(new Uint8Array(encryptedContent), iv.length);
+        // New format: MARKER + SALT + IV + CIPHERTEXT
+        const encryptedBytes = new Uint8Array(this.MARKER.length + salt.length + iv.length + encryptedContent.byteLength);
+        encryptedBytes.set(this.MARKER, 0);
+        encryptedBytes.set(salt, this.MARKER.length);
+        encryptedBytes.set(iv, this.MARKER.length + salt.length);
+        encryptedBytes.set(new Uint8Array(encryptedContent), this.MARKER.length + salt.length + iv.length);
 
-        return btoa(String.fromCharCode.apply(null, Array.from(encryptedBytes)));
+        // Safe conversion to base64 for potentially large data
+        let binary = '';
+        for (let i = 0; i < encryptedBytes.length; i++) {
+            binary += String.fromCharCode(encryptedBytes[i]);
+        }
+        return btoa(binary);
     }
 
     public static async decrypt(encryptedData: string, pin: string): Promise<string> {
         try {
-            const key = await this.deriveKey(pin);
-            const encryptedBytes = new Uint8Array(Array.from(atob(encryptedData), c => c.charCodeAt(0)));
-            const iv = encryptedBytes.slice(0, 12);
-            const encryptedContent = encryptedBytes.slice(12);
+            const binaryString = atob(encryptedData);
+            const encryptedBytes = new Uint8Array(binaryString.length);
+            for (let i = 0; i < binaryString.length; i++) {
+                encryptedBytes[i] = binaryString.charCodeAt(i);
+            }
 
+            let salt: Uint8Array;
+            let iv: Uint8Array;
+            let encryptedContent: Uint8Array;
+
+            // Check if it's the new format
+            const isNewFormat = encryptedBytes.length >= this.MARKER.length &&
+                this.MARKER.every((byte, i) => encryptedBytes[i] === byte);
+
+            if (isNewFormat) {
+                salt = encryptedBytes.slice(this.MARKER.length, this.MARKER.length + this.SALT_LENGTH);
+                iv = encryptedBytes.slice(this.MARKER.length + this.SALT_LENGTH, this.MARKER.length + this.SALT_LENGTH + this.IV_LENGTH);
+                encryptedContent = encryptedBytes.slice(this.MARKER.length + this.SALT_LENGTH + this.IV_LENGTH);
+            } else {
+                // Fallback to old format: IV + CIPHERTEXT using static OLD_SALT
+                const enc = new TextEncoder();
+                salt = enc.encode(this.OLD_SALT);
+                iv = encryptedBytes.slice(0, this.IV_LENGTH);
+                encryptedContent = encryptedBytes.slice(this.IV_LENGTH);
+            }
+
+            const key = await this.deriveKey(pin, salt);
             const decryptedContent = await window.crypto.subtle.decrypt(
                 {
                     name: 'AES-GCM',
