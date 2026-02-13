@@ -4,7 +4,7 @@
  * Adapted from React Native design with brand colors
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { CalendarService, Meeting } from '../services/CalendarService';
 
 interface WeeklyScheduleProps {
@@ -20,6 +20,8 @@ interface ScheduleItem {
     description: string;
     color: string;
 }
+
+const WEEK_DAYS = ['MON', 'TUE', 'WED', 'THU', 'FRI'];
 
 const WeeklySchedule: React.FC<WeeklyScheduleProps> = ({ calendarService, isConnected }) => {
     const [selectedDate, setSelectedDate] = useState(new Date());
@@ -128,19 +130,31 @@ const WeeklySchedule: React.FC<WeeklyScheduleProps> = ({ calendarService, isConn
         fetchEvents();
     }, [calendarService, isConnected, selectedDate]);
 
-    const filteredItems = scheduleItems.filter(
-        (item) =>
-            item.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
-            item.description.toLowerCase().includes(searchQuery.toLowerCase())
-    );
+    const filteredItems = useMemo(() => {
+        const query = searchQuery.toLowerCase();
+        return scheduleItems.filter(
+            (item) =>
+                item.title.toLowerCase().includes(query) ||
+                item.description.toLowerCase().includes(query)
+        );
+    }, [scheduleItems, searchQuery]);
+
+    const groupedItems = useMemo(() => {
+        const groups: Record<string, ScheduleItem[]> = {};
+        filteredItems.forEach(item => {
+            if (!groups[item.day]) {
+                groups[item.day] = [];
+            }
+            groups[item.day].push(item);
+        });
+        return groups;
+    }, [filteredItems]);
 
     const navigateWeek = (direction: 'prev' | 'next') => {
         const newDate = new Date(selectedDate);
         newDate.setDate(selectedDate.getDate() + (direction === 'next' ? 7 : -7));
         setSelectedDate(newDate);
     };
-
-    const weekDays = ['MON', 'TUE', 'WED', 'THU', 'FRI'];
 
     if (!isConnected) {
         return null;
@@ -229,8 +243,8 @@ const WeeklySchedule: React.FC<WeeklyScheduleProps> = ({ calendarService, isConn
 
             {!isLoading && !error && (
                 <div style={styles.scrollContainer}>
-                    {weekDays.map((day) => {
-                        const dayItems = filteredItems.filter((item) => item.day === day);
+                    {WEEK_DAYS.map((day) => {
+                        const dayItems = groupedItems[day] || [];
                         return (
                             <div key={day} style={styles.daySection}>
                                 <h3 style={styles.dayTitle}>{day}</h3>
@@ -238,7 +252,7 @@ const WeeklySchedule: React.FC<WeeklyScheduleProps> = ({ calendarService, isConn
                                     <div style={styles.emptyDay}>No events</div>
                                 ) : (
                                     dayItems.map((item, index) => (
-                                        <div key={index} style={[styles.eventCard, { backgroundColor: item.color }]}>
+                                        <div key={index} style={{ ...styles.eventCard, backgroundColor: item.color }}>
                                             <div style={styles.eventTime}>
                                                 <div style={styles.eventTimeText}>{item.startTime}</div>
                                                 <div style={styles.eventTimeText}>{item.endTime}</div>
