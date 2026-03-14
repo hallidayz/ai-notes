@@ -2086,6 +2086,83 @@ Now return ONLY the JSON:`;
         return clustered.join('\n');
     }
 
+    /**
+     * Process a custom AI command on the transcript
+     */
+    public async processCustomCommand(
+        transcript: string,
+        command: string,
+        progressCallback: (status: string, progress?: number) => void
+    ): Promise<string> {
+        await this.getAnalysisPipeline((p: any) => {
+            if (p.status === 'progress') {
+                progressCallback('Loading analysis model...', p.progress);
+            }
+        });
+
+        // Truncate transcript if too long to fit in token limit
+        const truncatedTranscript = this.truncateTranscript(transcript, 1500);
+
+        const prompt = `Task: Execute the following command on the transcript.
+
+Command: ${command}
+
+Transcript to analyze:
+${truncatedTranscript}
+
+CRITICAL: Return ONLY the response to the command. Do NOT repeat the transcript. Do NOT include any conversational filler.
+Response:`;
+
+        progressCallback('Processing custom command...', 80);
+
+        if (!this.tokenizer || !this.model) {
+            throw new Error("Analysis model not initialized");
+        }
+
+        try {
+            const inputs = this.tokenizer(prompt, {
+                return_tensors: 'pt',
+                padding: true,
+                truncation: true,
+                max_length: 2048
+            });
+
+            if (!inputs || !inputs.input_ids || !inputs.attention_mask) {
+                throw new Error('Tokenizer did not return expected input_ids and attention_mask');
+            }
+
+            const output = await this.model.generate(inputs, {
+                max_new_tokens: 512,
+                num_beams: 1,
+                do_sample: false,
+                pad_token_id: this.tokenizer.eos_token_id || 0,
+                early_stopping: false
+            });
+
+            if (!output || !output[0]) {
+                throw new Error("Model did not return expected output");
+            }
+
+            let resultText = this.tokenizer.decode(output[0], { skip_special_tokens: true });
+
+            // Remove common prefixes
+            resultText = resultText
+                .replace(/^Output:\s*/i, '')
+                .replace(/^Response:\s*/i, '')
+                .replace(/^Here's?\s*/i, '')
+                .trim();
+
+            if (!resultText) {
+                return 'No response generated. The AI model may need a more specific command.';
+            }
+
+            return resultText;
+        } catch (error: any) {
+            console.error('Custom command generation error:', error);
+            throw new Error(`Command execution failed: ${error?.message || 'Unknown error'}`);
+        }
+    }
+
     private extractList(text: string, keywords: string[]): string[] {
         for (const keyword of keywords) {
             // Try to find a list after the keyword
@@ -3944,6 +4021,61 @@ const MainApp: React.FC<{ pin: string; authService: AuthService; onLock: () => v
         }
     };
 
+    const handleCustomCommand = async (command: string) => {
+        if (!selectedSession) return;
+
+        const sessionId = selectedSession.id;
+        if (!sessionId) return;
+
+        let currentSession = sessions.find(s => s.id === sessionId);
+        if (!currentSession) return;
+
+        try {
+            showStatus(`Processing custom command: ${command}...`, 'info');
+
+            // We need transcript text to process the command
+            let transcriptText = '';
+            if (currentSession.transcript && typeof currentSession.transcript === 'string') {
+                try {
+                    const parsed = JSON.parse(currentSession.transcript);
+                    transcriptText = parsed.map((c: any) => c.text).join(' ');
+                } catch (e) {
+                    // ignore
+                }
+            } else if (Array.isArray(currentSession.transcript)) {
+                transcriptText = currentSession.transcript.map((c: any) => c.text).join(' ');
+            }
+
+            if (!transcriptText || transcriptText.trim() === '') {
+                showStatus('Cannot process command: No transcript found. Please wait for transcription to finish.', 'error');
+                return;
+            }
+
+            const result = await onDeviceAIService.processCustomCommand(
+                transcriptText,
+                command,
+                (status) => {
+                    showStatus(`${status}`, 'info', 5000);
+                }
+            );
+
+            // Append result to notes
+            const currentNotes = currentSession.notes || '';
+            const updatedNotes = currentNotes + `\n\n**${command}**\n${result}`;
+
+            const updatedSession = {
+                ...currentSession,
+                notes: updatedNotes
+            };
+
+            await handleUpdateSession(updatedSession);
+            showStatus('Command processed successfully!', 'success');
+        } catch (error: any) {
+            console.error('Custom command error:', error);
+            showStatus(`Failed to process command: ${error?.message || 'Unknown error'}`, 'error', 5000);
+        }
+    };
+
     return (
         <div
             className="app-layout"
@@ -3990,6 +4122,7 @@ const MainApp: React.FC<{ pin: string; authService: AuthService; onLock: () => v
                 onUpdateSession={handleUpdateSession}
                 onSummarize={handleSummarize}
                 onActionItems={handleActionItems}
+                onNewCommand={handleCustomCommand}
                 pin={pin}
             />
 

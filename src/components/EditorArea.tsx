@@ -99,6 +99,7 @@ interface EditorAreaProps {
     onUpdateSession: (session: Session) => void;
     onSummarize?: () => void;
     onActionItems?: () => void;
+    onNewCommand?: (command: string) => void;
     pin: string;
 }
 
@@ -111,6 +112,7 @@ export const EditorArea: React.FC<EditorAreaProps> = ({
     onUpdateSession,
     onSummarize,
     onActionItems,
+    onNewCommand,
     pin
 }) => {
     const [showCommandPalette, setShowCommandPalette] = useState(false);
@@ -514,8 +516,7 @@ export const EditorArea: React.FC<EditorAreaProps> = ({
                             onSummarize={onSummarize}
                             onActionItems={onActionItems}
                             onNewCommand={(command) => {
-                                // TODO: Implement custom AI command
-                                console.log('Custom command:', command);
+                                onNewCommand?.(command);
                                 setShowCommandPalette(false);
                             }}
                         />
