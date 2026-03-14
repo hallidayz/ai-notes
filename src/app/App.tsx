@@ -387,6 +387,8 @@ class OnDeviceAIService {
     private analysisPipe: any = null;
     private tokenizer: any = null;
     private model: any = null;
+    private analysisLoadPromise: Promise<void> | null = null;
+    private transcriptionLoadPromise: Promise<any> | null = null;
 
     private constructor() {}
 
@@ -418,159 +420,177 @@ class OnDeviceAIService {
         
         // Reload pipeline if language changed
         if (!this.transcriptionPipe || this.transcriptionLanguage !== lang) {
-            try {
-                const transformers = await getTransformers();
-                if (!transformers || !transformers.pipeline) {
-                    throw new Error('Transformers.js not loaded');
-                }
-                
-                // Ensure transformers.js uses our proxy
-                if (transformers.env) {
-                    transformers.env.remoteHost = 'http://localhost:3001';
-                    transformers.env.useBrowserCache = true;
-                }
-                
-                // Log on-device verification
-                console.log('Transcription: On-Device Processing', {
-                    model: modelName,
-                    cacheEnabled: transformers.env?.useBrowserCache || false,
-                    processingLocation: 'browser',
-                    dataTransmission: 'none'
-                });
-                
-                // Use pipeline with explicit configuration to ensure proxy is used
-                // transformers.js will auto-detect the model type from the config
-                // For Whisper models, we need to ensure the config is loaded correctly
-                try {
-                    console.log('Creating transcription pipeline for model:', modelName);
-                    // Explicitly specify the task and model to ensure correct detection
-                    this.transcriptionPipe = await transformers.pipeline(
-                        'automatic-speech-recognition', 
-                        modelName,
-                        {
-                            progress_callback: (progress: any) => {
-                                if (progress_callback) progress_callback(progress);
-                            },
-                            // Use wasm device (webgpu is also supported but wasm is more compatible)
-                            device: 'wasm'
+            // Cancel any ongoing load if language changes
+            // Only cancel if transcriptionLanguage was already set (i.e. not null) to avoid resetting on first load
+            if (this.transcriptionLanguage !== null && this.transcriptionLanguage !== lang && this.transcriptionLoadPromise) {
+                this.transcriptionLoadPromise = null;
+            }
+
+            if (!this.transcriptionLoadPromise) {
+                this.transcriptionLoadPromise = (async () => {
+                    try {
+                        const transformers = await getTransformers();
+                        if (!transformers || !transformers.pipeline) {
+                            throw new Error('Transformers.js not loaded');
                         }
-                    );
-                    console.log('Pipeline created successfully. Type:', typeof this.transcriptionPipe);
-                    
-                    // Verify the pipeline is set up correctly by checking if it's a function
-                    if (typeof this.transcriptionPipe !== 'function') {
-                        throw new Error('Pipeline is not a function - pipeline creation may have failed');
-                    }
-                } catch (pipelineError: any) {
-                    // If pipeline creation fails with "Unsupported model type", 
-                    // transformers.js may not support Whisper models in this version
-                    if (pipelineError?.message?.includes('Unsupported model type')) {
-                        console.error('Whisper model not supported:', pipelineError.message);
-                        console.error('Model name:', modelName);
-                        console.error('This version of transformers.js may not support Whisper models.');
-                        console.error('Error details:', {
-                            error: pipelineError.message,
-                            modelType: 'whisper',
-                            transformersVersion: transformers?.version || 'unknown'
+
+                        // Ensure transformers.js uses our proxy
+                        if (transformers.env) {
+                            transformers.env.remoteHost = 'http://localhost:3001';
+                            transformers.env.useBrowserCache = true;
+                        }
+
+                        // Log on-device verification
+                        console.log('Transcription: On-Device Processing', {
+                            model: modelName,
+                            cacheEnabled: transformers.env?.useBrowserCache || false,
+                            processingLocation: 'browser',
+                            dataTransmission: 'none'
                         });
-                        // Provide a clear error message to the user
-                        throw new Error(`Whisper models are not supported in this version of transformers.js (${transformers?.version || 'unknown'}). The library is trying to use AutoModelForCTC instead of WhisperForConditionalGeneration. Please check for a newer version of @huggingface/transformers that supports Whisper models, or use an alternative transcription approach.`);
-                    }
-                    throw pipelineError;
-                }
-                
-                this.transcriptionLanguage = lang;
-                
-                // Verify model functionality after load
-                if (!this.transcriptionPipe || typeof this.transcriptionPipe !== 'function') {
-                    throw new Error('Transcription model failed verification - pipeline is not a function');
-                }
-                
-                console.log('Transcription model loaded successfully');
-            } catch (error: any) {
-                const errorMessage = error?.message || 'Unknown error loading transcription model';
-                console.error('Transcription model load error:', error);
-                console.error('Error details:', {
-                    message: errorMessage,
-                    stack: error?.stack,
-                    name: error?.name
-                });
-                
-                // Check if error is HTML/JSON parsing issue
-                if (errorMessage.includes('<!DOCTYPE') || 
-                    errorMessage.includes('Unexpected token') || 
-                    errorMessage.includes('HTML error page') ||
-                    errorMessage.includes('HTML instead of JSON')) {
-                    throw new Error(`Model download failed: Received HTML error page instead of JSON. This usually means:
+
+                        // Use pipeline with explicit configuration to ensure proxy is used
+                        // transformers.js will auto-detect the model type from the config
+                        // For Whisper models, we need to ensure the config is loaded correctly
+                        try {
+                            console.log('Creating transcription pipeline for model:', modelName);
+                            // Explicitly specify the task and model to ensure correct detection
+                            this.transcriptionPipe = await transformers.pipeline(
+                                'automatic-speech-recognition',
+                                modelName,
+                                {
+                                    progress_callback: (progress: any) => {
+                                        if (progress_callback) progress_callback(progress);
+                                    },
+                                    // Use wasm device (webgpu is also supported but wasm is more compatible)
+                                    device: 'wasm'
+                                }
+                            );
+                            console.log('Pipeline created successfully. Type:', typeof this.transcriptionPipe);
+
+                            // Verify the pipeline is set up correctly by checking if it's a function
+                            if (typeof this.transcriptionPipe !== 'function') {
+                                throw new Error('Pipeline is not a function - pipeline creation may have failed');
+                            }
+                        } catch (pipelineError: any) {
+                            // If pipeline creation fails with "Unsupported model type",
+                            // transformers.js may not support Whisper models in this version
+                            if (pipelineError?.message?.includes('Unsupported model type')) {
+                                console.error('Whisper model not supported:', pipelineError.message);
+                                console.error('Model name:', modelName);
+                                console.error('This version of transformers.js may not support Whisper models.');
+                                console.error('Error details:', {
+                                    error: pipelineError.message,
+                                    modelType: 'whisper',
+                                    transformersVersion: transformers?.version || 'unknown'
+                                });
+                                // Provide a clear error message to the user
+                                throw new Error(`Whisper models are not supported in this version of transformers.js (${transformers?.version || 'unknown'}). The library is trying to use AutoModelForCTC instead of WhisperForConditionalGeneration. Please check for a newer version of @huggingface/transformers that supports Whisper models, or use an alternative transcription approach.`);
+                            }
+                            throw pipelineError;
+                        }
+
+                        this.transcriptionLanguage = lang;
+
+                        // Verify model functionality after load
+                        if (!this.transcriptionPipe || typeof this.transcriptionPipe !== 'function') {
+                            throw new Error('Transcription model failed verification - pipeline is not a function');
+                        }
+
+                        console.log('Transcription model loaded successfully');
+                    } catch (error: any) {
+                        this.transcriptionLoadPromise = null;
+                        const errorMessage = error?.message || 'Unknown error loading transcription model';
+                        console.error('Transcription model load error:', error);
+                        console.error('Error details:', {
+                            message: errorMessage,
+                            stack: error?.stack,
+                            name: error?.name
+                        });
+
+                        // Check if error is HTML/JSON parsing issue
+                        if (errorMessage.includes('<!DOCTYPE') ||
+                            errorMessage.includes('Unexpected token') ||
+                            errorMessage.includes('HTML error page') ||
+                            errorMessage.includes('HTML instead of JSON')) {
+                            throw new Error(`Model download failed: Received HTML error page instead of JSON. This usually means:
 1. The model URL is incorrect or the model doesn't exist
 2. Hugging Face returned an error page (check terminal logs)
 3. The proxy isn't working correctly
 
 Please check the browser console and terminal logs for more details. Try refreshing the page.`);
-                }
-                
-                throw new Error(`Failed to load transcription model: ${errorMessage}. Please refresh and try again.`);
+                        }
+
+                        throw new Error(`Failed to load transcription model: ${errorMessage}. Please refresh and try again.`);
+                    }
+                })();
             }
+            await this.transcriptionLoadPromise;
         }
         return this.transcriptionPipe;
     }
 
     public async getAnalysisPipeline(progress_callback?: (progress: any) => void) {
         if (!this.tokenizer || !this.model) {
-            try {
-                const transformers = await getTransformers();
-                if (!transformers || !transformers.AutoTokenizer || !transformers.AutoModelForSeq2SeqLM) {
-                    throw new Error('Transformers.js not loaded');
-                }
-                
-                // Ensure transformers.js uses our proxy
-                if (transformers.env) {
-                    transformers.env.remoteHost = 'http://localhost:3001';
-                }
-                
-                // Log on-device verification
-                console.log('Analysis: On-Device Processing', {
-                    model: 'Xenova/flan-t5-base',
-                    cacheEnabled: transformers.env?.useBrowserCache || false,
-                    processingLocation: 'browser',
-                    dataTransmission: 'none'
-                });
-                
-                const progressHandler = (progress: any) => {
-                    if (progress_callback) progress_callback(progress);
-                };
-                // Upgraded to flan-t5-base for better quality while maintaining reasonable size
-                // flan-t5-base is better than LaMini-Flan-T5-783M for instruction following and JSON generation
-                const modelName = 'Xenova/flan-t5-base';
-                this.tokenizer = await transformers.AutoTokenizer.from_pretrained(modelName, { progress_callback: progressHandler });
-                this.model = await transformers.AutoModelForSeq2SeqLM.from_pretrained(modelName, { progress_callback: progressHandler });
-                
-                // Verify model functionality after load
-                if (!this.tokenizer || typeof this.tokenizer !== 'function') {
-                    throw new Error('Tokenizer failed verification - not a function');
-                }
-                if (!this.model || typeof this.model.generate !== 'function') {
-                    throw new Error('Analysis model failed verification - generate method missing');
-                }
-            } catch (error: any) {
-                const errorMessage = error?.message || 'Unknown error loading analysis model';
-                console.error('Analysis model load error:', error);
-                
-                // Check if error is HTML/JSON parsing issue
-                if (errorMessage.includes('<!DOCTYPE') || 
-                    errorMessage.includes('Unexpected token') || 
-                    errorMessage.includes('HTML error page') ||
-                    errorMessage.includes('HTML instead of JSON')) {
-                    throw new Error(`Model download failed: Received HTML error page instead of JSON. This usually means:
+            if (!this.analysisLoadPromise) {
+                this.analysisLoadPromise = (async () => {
+                    try {
+                        const transformers = await getTransformers();
+                        if (!transformers || !transformers.AutoTokenizer || !transformers.AutoModelForSeq2SeqLM) {
+                            throw new Error('Transformers.js not loaded');
+                        }
+
+                        // Ensure transformers.js uses our proxy
+                        if (transformers.env) {
+                            transformers.env.remoteHost = 'http://localhost:3001';
+                        }
+
+                        // Log on-device verification
+                        console.log('Analysis: On-Device Processing', {
+                            model: 'Xenova/flan-t5-base',
+                            cacheEnabled: transformers.env?.useBrowserCache || false,
+                            processingLocation: 'browser',
+                            dataTransmission: 'none'
+                        });
+
+                        const progressHandler = (progress: any) => {
+                            if (progress_callback) progress_callback(progress);
+                        };
+                        // Upgraded to flan-t5-base for better quality while maintaining reasonable size
+                        // flan-t5-base is better than LaMini-Flan-T5-783M for instruction following and JSON generation
+                        const modelName = 'Xenova/flan-t5-base';
+                        this.tokenizer = await transformers.AutoTokenizer.from_pretrained(modelName, { progress_callback: progressHandler });
+                        this.model = await transformers.AutoModelForSeq2SeqLM.from_pretrained(modelName, { progress_callback: progressHandler });
+
+                        // Verify model functionality after load
+                        if (!this.tokenizer || typeof this.tokenizer !== 'function') {
+                            throw new Error('Tokenizer failed verification - not a function');
+                        }
+                        if (!this.model || typeof this.model.generate !== 'function') {
+                            throw new Error('Analysis model failed verification - generate method missing');
+                        }
+                    } catch (error: any) {
+                        this.analysisLoadPromise = null;
+                        const errorMessage = error?.message || 'Unknown error loading analysis model';
+                        console.error('Analysis model load error:', error);
+
+                        // Check if error is HTML/JSON parsing issue
+                        if (errorMessage.includes('<!DOCTYPE') ||
+                            errorMessage.includes('Unexpected token') ||
+                            errorMessage.includes('HTML error page') ||
+                            errorMessage.includes('HTML instead of JSON')) {
+                            throw new Error(`Model download failed: Received HTML error page instead of JSON. This usually means:
 1. The model URL is incorrect or the model doesn't exist
 2. Hugging Face returned an error page (check terminal logs)
 3. The proxy isn't working correctly
 
 Please check the browser console and terminal logs for more details. Try refreshing the page.`);
-                }
-                
-                throw new Error(`Failed to load analysis model: ${errorMessage}. Please refresh and try again.`);
+                        }
+
+                        throw new Error(`Failed to load analysis model: ${errorMessage}. Please refresh and try again.`);
+                    }
+                })();
             }
+            await this.analysisLoadPromise;
         }
     }
 
