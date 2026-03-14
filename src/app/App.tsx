@@ -2086,6 +2086,64 @@ Now return ONLY the JSON:`;
         return clustered.join('\n');
     }
 
+    public async generateText(
+        prompt: string,
+        progressCallback?: (status: string, progress?: number) => void
+    ): Promise<string> {
+        await this.getAnalysisPipeline((p: any) => {
+            if (p.status === 'progress' && progressCallback) {
+                progressCallback('Loading analysis model...', p.progress);
+            }
+        });
+
+        if (progressCallback) {
+            progressCallback('Generating response...', 60);
+        }
+
+        if (!this.tokenizer || !this.model) {
+            throw new Error("Analysis model not initialized");
+        }
+
+        try {
+            const inputs = this.tokenizer(prompt, {
+                padding: true,
+                truncation: true,
+                max_length: 2048
+            });
+
+            if (!inputs || !inputs.input_ids || !inputs.attention_mask) {
+                throw new Error('Tokenizer did not return expected input_ids and attention_mask');
+            }
+
+            const output = await this.model.generate(inputs, {
+                max_new_tokens: 512,
+                num_beams: 1,
+                do_sample: false,
+                pad_token_id: this.tokenizer.eos_token_id || 0
+            });
+
+            if (!output || !output[0]) {
+                throw new Error("Model did not return expected output");
+            }
+
+            const resultText = this.tokenizer.decode(output[0], { skip_special_tokens: true });
+
+            // Check if model returned prompt as part of output (for causal LMs)
+            let cleanedResult = resultText;
+            if (cleanedResult.startsWith(prompt)) {
+                cleanedResult = cleanedResult.substring(prompt.length).trim();
+            }
+
+            // Generic output prefix stripping just in case
+            cleanedResult = cleanedResult.replace(/^Output:\s*/i, '').trim();
+
+            return cleanedResult;
+        } catch (error: any) {
+            console.error('Text generation error:', error);
+            throw new Error(`Generation failed: ${error?.message || 'Unknown error'}`);
+        }
+    }
+
     private extractList(text: string, keywords: string[]): string[] {
         for (const keyword of keywords) {
             // Try to find a list after the keyword
@@ -3990,6 +4048,12 @@ const MainApp: React.FC<{ pin: string; authService: AuthService; onLock: () => v
                 onUpdateSession={handleUpdateSession}
                 onSummarize={handleSummarize}
                 onActionItems={handleActionItems}
+                onCustomPrompt={(prompt) => {
+                    return onDeviceAIService.generateText(prompt, (status) => {
+                        // Optional progress feedback; we could update a global status if desired
+                        // showStatus(`AI: ${status}`, 'info');
+                    });
+                }}
                 pin={pin}
             />
 

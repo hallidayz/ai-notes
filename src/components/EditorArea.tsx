@@ -99,6 +99,7 @@ interface EditorAreaProps {
     onUpdateSession: (session: Session) => void;
     onSummarize?: () => void;
     onActionItems?: () => void;
+    onCustomPrompt?: (prompt: string) => Promise<string>;
     pin: string;
 }
 
@@ -111,6 +112,7 @@ export const EditorArea: React.FC<EditorAreaProps> = ({
     onUpdateSession,
     onSummarize,
     onActionItems,
+    onCustomPrompt,
     pin
 }) => {
     const [showCommandPalette, setShowCommandPalette] = useState(false);
@@ -513,10 +515,27 @@ export const EditorArea: React.FC<EditorAreaProps> = ({
                             onClose={() => setShowCommandPalette(false)}
                             onSummarize={onSummarize}
                             onActionItems={onActionItems}
-                            onNewCommand={(command) => {
-                                // TODO: Implement custom AI command
-                                console.log('Custom command:', command);
+                            onNewCommand={async (command) => {
                                 setShowCommandPalette(false);
+                                setGhostText(`Processing command: ${command}...`);
+
+                                try {
+                                    if (onCustomPrompt) {
+                                        // Truncate content to roughly 1500 tokens (approx 6000 characters) to avoid context window issues
+                                        const truncatedContent = content.length > 6000
+                                            ? `${content.substring(0, 3000)}... [middle section truncated] ...${content.substring(content.length - 3000)}`
+                                            : content;
+
+                                        const prompt = `Context: ${truncatedContent}\n\nTask: ${command}\n\nOutput:`;
+                                        const resultText = await onCustomPrompt(prompt);
+                                        setGhostText(resultText);
+                                    } else {
+                                        setGhostText('AI service is not ready. Please try again later.');
+                                    }
+                                } catch (error) {
+                                    console.error('Failed to process AI command:', error);
+                                    setGhostText('');
+                                }
                             }}
                         />
                     )}
