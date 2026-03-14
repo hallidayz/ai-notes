@@ -1,6 +1,7 @@
 import express from 'express';
 import { Pool } from 'pg';
 import cors from 'cors';
+import jwt from 'jsonwebtoken';
 
 // Basic Express + Postgres skeleton for MeetingMinds API
 // Note: this is intentionally minimal; real deployment should
@@ -19,12 +20,27 @@ const pool = new Pool({
 });
 
 // Middleware to set app.current_user_id for RLS policies.
-// For now this assumes an upstream auth layer populates req.userId.
-app.use(async (req, _res, next) => {
-  // TODO: integrate with real auth and JWT validation.
-  const userId = (req as any).userId as string | undefined;
+// It parses the Authorization header and verifies the JWT.
+app.use(async (req, res, next) => {
+  let userId: string | undefined;
+
+  const authHeader = req.headers.authorization;
+  if (authHeader && authHeader.startsWith('Bearer ')) {
+    const token = authHeader.split(' ')[1];
+    if (token) {
+      try {
+        const secret = process.env.JWT_SECRET || 'default_jwt_secret';
+        const decoded = jwt.verify(token, secret) as { userId?: string, sub?: string };
+        userId = decoded.userId || decoded.sub;
+      } catch (err) {
+        console.error('JWT validation failed', err);
+        return res.status(401).json({ error: 'Unauthorized: Invalid token' });
+      }
+    }
+  }
 
   if (userId) {
+    (req as any).userId = userId;
     try {
       await pool.query('SELECT set_config($1, $2, true)', [
         'app.current_user_id',
