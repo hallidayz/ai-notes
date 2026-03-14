@@ -46,90 +46,51 @@ const checkFirstTimeSetup = async (): Promise<boolean> => {
  * transformers.js stores models in IndexedDB with keys based on model name
  */
 async function checkModelCache(db: IDBDatabase, modelName: string): Promise<boolean> {
-    return new Promise((resolve) => {
-        try {
-            // transformers.js uses a cache database, typically named 'transformers-cache' or similar
-            // Check multiple possible object store names
-            const objectStoreNames = ['files', 'models', 'cache', 'transformers-cache'];
-            let found = false;
-            let checked = 0;
-            let resolved = false; // Track if promise has been resolved
-            
-            const safeResolve = (value: boolean) => {
-                if (!resolved) {
-                    resolved = true;
-                    resolve(value);
-                }
-            };
-            
-            const checkStore = (storeName: string) => {
-                if (!db.objectStoreNames.contains(storeName)) {
-                    checked++;
-                    if (checked === objectStoreNames.length && !resolved) {
-                        safeResolve(false);
-                    }
-                    return;
-                }
-                
+    const objectStoreNames = ['files', 'models', 'cache', 'transformers-cache'];
+
+    const checkPromises = objectStoreNames.map(storeName => {
+        return new Promise<boolean>((resolve) => {
+            if (!db.objectStoreNames.contains(storeName)) {
+                return resolve(false);
+            }
+
+            try {
                 const transaction = db.transaction([storeName], 'readonly');
                 const store = transaction.objectStore(storeName);
                 const index = store.index ? store.index('key') : null;
-                
+
                 if (index) {
                     const request = index.get(modelName);
-                    request.onsuccess = () => {
-                        if (request.result !== undefined) {
-                            found = true;
-                            safeResolve(true);
-                        } else {
-                            checked++;
-                            if (checked === objectStoreNames.length && !resolved) {
-                                safeResolve(false);
-                            }
-                        }
-                    };
-                    request.onerror = () => {
-                        checked++;
-                        if (checked === objectStoreNames.length && !found && !resolved) {
-                            safeResolve(false);
-                        }
-                    };
+                    request.onsuccess = () => resolve(request.result !== undefined);
+                    request.onerror = () => resolve(false);
                 } else {
-                    // Fallback: check if any key contains the model name
                     const request = store.openCursor();
                     request.onsuccess = () => {
                         const cursor = request.result;
                         if (cursor) {
                             if (cursor.key.toString().includes(modelName)) {
-                                found = true;
-                                safeResolve(true);
-                                return;
+                                resolve(true);
+                            } else {
+                                cursor.continue();
                             }
-                            cursor.continue();
                         } else {
-                            checked++;
-                            if (checked === objectStoreNames.length && !found && !resolved) {
-                                safeResolve(false);
-                            }
+                            resolve(false);
                         }
                     };
-                    request.onerror = () => {
-                        checked++;
-                        if (checked === objectStoreNames.length && !found && !resolved) {
-                            safeResolve(false);
-                        }
-                    };
+                    request.onerror = () => resolve(false);
                 }
-            };
-            
-            objectStoreNames.forEach(storeName => checkStore(storeName));
-        } catch {
-            if (!resolved) {
-                resolved = true;
+            } catch {
                 resolve(false);
             }
-        }
+        });
     });
+
+    try {
+        const results = await Promise.all(checkPromises);
+        return results.some(Boolean);
+    } catch {
+        return false;
+    }
 }
 
 /**
