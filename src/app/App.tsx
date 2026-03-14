@@ -5174,16 +5174,24 @@ const SessionDetailModal: React.FC<{
                                     const isTopicStart = currentTopic && currentTopic.chunkIndices[0] === index;
                                     
                                     // Highlight search matches
-                                    let highlightedText = chunk.text;
+                                    let highlightedContent: React.ReactNode = chunk.text;
                                     if (searchQuery && searchResults.length > 0) {
                                         const chunkResults = searchResults.filter(r => r.chunkIndex === index);
                                         if (chunkResults.length > 0) {
                                             const isActiveResult = currentResultIndex >= 0 && searchResults[currentResultIndex]?.chunkIndex === index;
-                                            // Simple highlighting - wrap matches
+                                            // Secure highlighting - build an array of ReactNodes
                                             const regex = new RegExp(`(${searchQuery.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi');
-                                            highlightedText = chunk.text.replace(regex, (match) => {
-                                                const bgColor = isActiveResult ? '#fda700' : 'yellow';
-                                                return `<mark style="background: ${bgColor}; padding: 2px 0; border-radius: 2px;">${match}</mark>`;
+                                            const parts = chunk.text.split(regex);
+                                            highlightedContent = parts.map((part, i) => {
+                                                if (regex.test(part)) {
+                                                    const bgColor = isActiveResult ? '#fda700' : 'yellow';
+                                                    return (
+                                                        <mark key={i} style={{ background: bgColor, padding: '2px 0', borderRadius: '2px' }}>
+                                                            {part}
+                                                        </mark>
+                                                    );
+                                                }
+                                                return <React.Fragment key={i}>{part}</React.Fragment>;
                                             });
                                         }
                                     }
@@ -5259,13 +5267,14 @@ const SessionDetailModal: React.FC<{
                                                 </div>
                                                 <div 
                                                     className="transcript-text"
-                                                    dangerouslySetInnerHTML={{ __html: highlightedText }}
                                                     style={{
                                                         lineHeight: '1.6',
                                                         fontSize: '14px',
                                                         color: 'var(--color-authority-navy)'
                                                     }}
-                                                />
+                                                >
+                                                    {highlightedContent}
+                                                </div>
                                             </div>
                                         </div>
                                     );
