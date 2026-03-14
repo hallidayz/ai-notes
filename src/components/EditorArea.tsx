@@ -212,15 +212,42 @@ export const EditorArea: React.FC<EditorAreaProps> = ({
         return () => window.removeEventListener('keydown', handleKeyDown);
     }, [showCommandPalette]);
 
-    // Ghost text feature (placeholder for AI suggestions)
+    // Ref for the timeout to allow debouncing the ghost text generation
+    const ghostTextTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+    // Ghost text feature (AI autocomplete suggestions)
     const handleContentChange = (e: React.FormEvent<HTMLDivElement>) => {
         const newContent = e.currentTarget.textContent || '';
         setContent(newContent);
         
-        // TODO: Integrate with AI service to generate ghost text suggestions
-        // For now, just clear ghost text when user types
-        if (newContent.length > 0) {
-            setGhostText('');
+        // Clear ghost text immediately when user types
+        setGhostText('');
+
+        if (ghostTextTimeoutRef.current) {
+            clearTimeout(ghostTextTimeoutRef.current);
+        }
+
+        // Only generate suggestions if there's enough context
+        if (newContent.length > 20) {
+            ghostTextTimeoutRef.current = setTimeout(async () => {
+                try {
+                    // This is a placeholder for the actual AI integration.
+                    // In a full implementation, you'd call a local or remote AI service
+                    // with the trailing context of the content.
+                    // e.g., const suggestion = await aiService.generateAutocomplete(newContent);
+
+                    // For now, we simulate an AI suggestion based on context
+                    if (newContent.trim().endsWith('and')) {
+                        setGhostText(' then we can proceed.');
+                    } else if (newContent.trim().endsWith('the')) {
+                        setGhostText(' main objective.');
+                    } else if (newContent.trim().endsWith('we should')) {
+                        setGhostText(' consider all options.');
+                    }
+                } catch (err) {
+                    console.error("Failed to generate ghost text:", err);
+                }
+            }, 1000); // 1s debounce
         }
     };
 
