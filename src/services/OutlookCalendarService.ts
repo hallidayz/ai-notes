@@ -3,7 +3,7 @@
  * Uses Microsoft Graph API with OAuth 2.0
  */
 
-import { CalendarService, Meeting, CalendarCredentials, CalendarProvider } from './CalendarService';
+import { CalendarService, Meeting, CalendarCredentials } from './CalendarService';
 
 export class OutlookCalendarService extends CalendarService {
     private clientId: string;

@@ -3,7 +3,7 @@
  * Uses Google Calendar API v3 with OAuth 2.0
  */
 
-import { CalendarService, Meeting, CalendarCredentials, CalendarProvider } from './CalendarService';
+import { CalendarService, Meeting, CalendarCredentials } from './CalendarService';
 
 export class GoogleCalendarService extends CalendarService {
     private clientId: string;
