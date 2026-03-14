@@ -52,13 +52,6 @@ export class SpeakerDiarizationService {
             // Load speaker profiles from IndexedDB
             await this.loadSpeakerProfiles();
             
-            // TODO: Load speaker verification model
-            // const transformers = await import('@huggingface/transformers');
-            // this.speakerModel = await transformers.pipeline(
-            //     'speaker-verification',
-            //     'speechbrain/spkrec-ecapa-voxceleb'
-            // );
-            
             console.log('Speaker Diarization Service initialized');
         } catch (error) {
             console.error('Error initializing speaker diarization:', error);
