@@ -3,7 +3,8 @@
  * Uses Google Calendar API v3 with OAuth 2.0
  */
 
-import { CalendarService, Meeting, CalendarCredentials, CalendarProvider } from './CalendarService';
+import { CalendarService } from './CalendarService.ts';
+import type { Meeting, CalendarCredentials, CalendarProvider } from './CalendarService.ts';
 
 export class GoogleCalendarService extends CalendarService {
     private clientId: string;
@@ -15,7 +16,7 @@ export class GoogleCalendarService extends CalendarService {
         // Get client ID from parameter, localStorage, or environment variable
         this.clientId = clientId || 
             (typeof window !== 'undefined' ? localStorage.getItem('oauth_google_client_id') : null) ||
-            import.meta.env.VITE_GOOGLE_CLIENT_ID || 
+            (typeof import.meta.env !== 'undefined' ? import.meta.env.VITE_GOOGLE_CLIENT_ID : null) ||
             '';
         this.redirectUri = typeof window !== 'undefined' 
             ? `${window.location.origin}/oauth/google/callback`
@@ -172,9 +173,10 @@ export class GoogleCalendarService extends CalendarService {
      */
     private async exchangeCodeForTokens(code: string): Promise<any> {
         // Use proxy in development, full URL in production
-        const apiUrl = import.meta.env.DEV 
+        const isDev = typeof import.meta.env !== 'undefined' ? import.meta.env.DEV : false;
+        const apiUrl = isDev
             ? '/api/oauth/google/token'  // Vite proxy handles this
-            : `${import.meta.env.VITE_API_URL || 'http://localhost:4000'}/api/oauth/google/token`;
+            : `${typeof import.meta.env !== 'undefined' && import.meta.env.VITE_API_URL ? import.meta.env.VITE_API_URL : 'http://localhost:4000'}/api/oauth/google/token`;
         const response = await fetch(apiUrl, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -220,9 +222,10 @@ export class GoogleCalendarService extends CalendarService {
 
         try {
             // Use proxy in development, full URL in production
-            const apiUrl = import.meta.env.DEV 
+            const isDev = typeof import.meta.env !== 'undefined' ? import.meta.env.DEV : false;
+            const apiUrl = isDev
                 ? '/api/oauth/google/refresh'  // Vite proxy handles this
-                : `${import.meta.env.VITE_API_URL || 'http://localhost:4000'}/api/oauth/google/refresh`;
+                : `${typeof import.meta.env !== 'undefined' && import.meta.env.VITE_API_URL ? import.meta.env.VITE_API_URL : 'http://localhost:4000'}/api/oauth/google/refresh`;
             const response = await fetch(apiUrl, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
