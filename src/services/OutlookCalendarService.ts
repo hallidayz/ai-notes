@@ -134,10 +134,17 @@ export class OutlookCalendarService extends CalendarService {
      * Generate state for OAuth security
      */
     private generateState(): string {
+        // Generate a cryptographically secure random string
+        const randomBytes = new Uint8Array(16);
+        window.crypto.getRandomValues(randomBytes);
+        const randomString = Array.from(randomBytes)
+            .map(b => b.toString(16).padStart(2, '0'))
+            .join('');
+
         return btoa(JSON.stringify({
             provider: 'outlook',
             timestamp: Date.now(),
-            random: Math.random().toString(36)
+            random: randomString
         }));
     }
 

@@ -189,7 +189,14 @@ export class SpeakerDiarizationService {
      * Create new speaker profile
      */
     async createSpeakerProfile(name: string, initialEmbedding: Float32Array): Promise<string> {
-        const speakerId = `speaker_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+        // Generate a secure random string for the ID
+        const randomBytes = new Uint8Array(4);
+        window.crypto.getRandomValues(randomBytes);
+        const randomString = Array.from(randomBytes)
+            .map(b => b.toString(16).padStart(2, '0'))
+            .join('');
+
+        const speakerId = `speaker_${Date.now()}_${randomString}`;
         const profile: SpeakerProfile = {
             id: speakerId,
             name,
