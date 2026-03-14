@@ -14,7 +14,7 @@
     "generate-icons": "node scripts/generate-icons.js"
   },
   "dependencies": {
-    "@huggingface/transformers": "^3.7.6",
+    "@huggingface/transformers": "^3.8.1",
     "lucide-react": "^0.561.0",
     "onnxruntime-web": "^1.23.2",
     "react": "^19.2.0",

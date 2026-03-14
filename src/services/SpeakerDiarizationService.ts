@@ -83,9 +83,15 @@ export class SpeakerDiarizationService {
             const channelData = audioBuffer.getChannelData(0);
             const segment = channelData.slice(startSample, endSample);
 
-            // TODO: Process through speaker verification model
-            // const embedding = await this.speakerModel(segment);
-            // return embedding;
+            // Process through speaker verification model
+            const result = await this.speakerModel(segment);
+
+            if (result && result.data) {
+                // Return as Float32Array
+                return result.data instanceof Float32Array
+                    ? result.data
+                    : new Float32Array(result.data);
+            }
 
             return null;
         } catch (error) {
