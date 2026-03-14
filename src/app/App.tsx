@@ -2016,9 +2016,16 @@ Now return ONLY the JSON:`;
         }
     }
 
+    private escapeRegExp(string: string): string {
+        return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    }
+
     private extractSection(text: string, keywords: string[]): string {
         for (const keyword of keywords) {
-            const regex = new RegExp(`${keyword}[:\n]\\s*([^\\n]+(?:\\n[^\\n]+)*)`, 'i');
+            const escapedKeyword = this.escapeRegExp(keyword);
+            // Replaced ReDoS-vulnerable regex with a safe equivalent that captures
+            // lazily up to an empty line or end of string
+            const regex = new RegExp(`${escapedKeyword}[:\n]\\s*([\\s\\S]*?)(?:\\n\\s*\\n|$)`, 'i');
             const match = text.match(regex);
             if (match && match[1]) {
                 return match[1].trim();
@@ -2088,8 +2095,10 @@ Now return ONLY the JSON:`;
 
     private extractList(text: string, keywords: string[]): string[] {
         for (const keyword of keywords) {
+            const escapedKeyword = this.escapeRegExp(keyword);
+
             // Try to find a list after the keyword
-            const regex = new RegExp(`${keyword}[:\n]\\s*((?:[-*•]\\s*[^\\n]+\\n?)+)`, 'i');
+            const regex = new RegExp(`${escapedKeyword}[:\n]\\s*((?:[-*•]\\s*[^\\n]+\\n?)+)`, 'i');
             const match = text.match(regex);
             if (match && match[1]) {
                 return match[1]
@@ -2099,7 +2108,7 @@ Now return ONLY the JSON:`;
             }
             
             // Try numbered list
-            const numberedRegex = new RegExp(`${keyword}[:\n]\\s*((?:\\d+\\.\\s*[^\\n]+\\n?)+)`, 'i');
+            const numberedRegex = new RegExp(`${escapedKeyword}[:\n]\\s*((?:\\d+\\.\\s*[^\\n]+\\n?)+)`, 'i');
             const numberedMatch = text.match(numberedRegex);
             if (numberedMatch && numberedMatch[1]) {
                 return numberedMatch[1]
