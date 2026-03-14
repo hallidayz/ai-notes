@@ -4,7 +4,7 @@
  */
 
 import React, { useState, useEffect } from 'react';
-import { X, Plus, Sparkles, Clock, Folder, Tag, Bot, Settings, Calendar, Lock } from 'lucide-react';
+import { X, Plus, Sparkles, Clock, Folder, Tag, Bot, Calendar, Lock } from 'lucide-react';
 
 interface Session {
     id?: number;
