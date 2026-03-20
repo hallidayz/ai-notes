@@ -1,0 +1,7 @@
+{
+  "name": "AI Notes",
+  "description": "On-Device, Private, AI Powered Notes with Full-Stack Local Storage options.",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}
