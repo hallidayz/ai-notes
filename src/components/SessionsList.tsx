@@ -14,8 +14,13 @@ export const SessionsList: React.FC<SessionsListProps> = ({ sessions, onSelect, 
         return <div className="empty-state">No sessions yet. Create one to get started!</div>;
     }
 
-    const decryptAndPreview = () => {
+    const decryptAndPreview = (session: Session) => {
         try {
+            if (session.notes && !session.notes.includes(' ')) {
+                // If there are no spaces, it might be base64. Let's try to decode.
+                // If it's invalid base64, atob will throw.
+                atob(session.notes);
+            }
             return `Encrypted notes...`;
         } catch {
             return "Could not decrypt preview.";
@@ -33,7 +38,7 @@ export const SessionsList: React.FC<SessionsListProps> = ({ sessions, onSelect, 
                             <span className="session-date">{new Date(session.date).toLocaleDateString()}</span>
                         </div>
                         {session.participants && <p className="session-participants">With: {session.participants}</p>}
-                        <p className="session-preview">{decryptAndPreview()}</p>
+                        <p className="session-preview">{decryptAndPreview(session)}</p>
                         {session.analysisStatus && session.analysisStatus !== 'complete' && session.analysisStatus !== 'none' && (
                             <div className={`session-status-indicator ${session.analysisStatus}`}>
                                 {session.analysisStatus === 'pending' && <><div className="spinner-small"></div> Processing AI analysis...</>}
