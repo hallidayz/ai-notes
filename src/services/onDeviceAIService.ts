@@ -1,12 +1,12 @@
 
-import { pipeline, env } from '@xenova/transformers';
+import { pipeline, env, AutomaticSpeechRecognitionPipeline, Text2TextGenerationPipeline } from '@xenova/transformers';
 import { GoogleGenAI, Type } from "@google/genai";
 import { TranscriptChunk, ModelConfig } from '../types';
 
 export class OnDeviceAIService {
     private static instance: OnDeviceAIService | null = null;
-    private transcriptionPipe: unknown = null;
-    private analysisPipe: unknown = null;
+    private transcriptionPipe: AutomaticSpeechRecognitionPipeline | null = null;
+    private analysisPipe: Text2TextGenerationPipeline | null = null;
     private currentConfig: ModelConfig = {
         transcriptionModelId: 'whisper-tiny-en',
         analysisModelId: 'flan-t5-small'
@@ -56,10 +56,9 @@ export class OnDeviceAIService {
         if (!this.transcriptionPipe) {
             this.transcriptionPipe = await pipeline('automatic-speech-recognition', modelPath, {
                 progress_callback,
-            });
+            }) as AutomaticSpeechRecognitionPipeline;
         }
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        return this.transcriptionPipe as any;
+        return this.transcriptionPipe;
     }
 
     private async getAnalysisPipeline(progress_callback?: (progress: { status: string; progress?: number }) => void) {
@@ -67,10 +66,9 @@ export class OnDeviceAIService {
         if (!this.analysisPipe) {
             this.analysisPipe = await pipeline('text2text-generation', modelPath, {
                 progress_callback,
-            });
+            }) as Text2TextGenerationPipeline;
         }
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        return this.analysisPipe as any;
+        return this.analysisPipe;
     }
 
     public async analyze(
