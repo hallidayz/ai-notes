@@ -74,6 +74,7 @@ export const CalendarIntegration: React.FC<CalendarIntegrationProps> = ({ pin, s
     fetchEvents();
 
     const handleMessage = async (event: MessageEvent) => {
+      if (event.origin !== window.location.origin) return;
       if (event.data?.type === 'OAUTH_AUTH_SUCCESS') {
         const { provider, tokens } = event.data;
         try {
