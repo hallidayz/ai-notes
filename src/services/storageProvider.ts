@@ -54,8 +54,22 @@ export class ServerStorageProvider implements StorageProvider {
         return sessions;
     }
     async getSession(id: number) {
-        const sessions = await this.getAllSessions();
-        return sessions.find((s: Session) => s.id === id);
+        const { CryptoService } = await import('./cryptoService');
+        try {
+            const res = await fetch(`/api/storage/item/${id}`);
+            if (!res.ok) {
+                return undefined;
+            }
+            const item = await res.json();
+            if (item.data && item.data.encrypted) {
+                const decrypted = await CryptoService.decrypt(item.data.encrypted, this.pin);
+                return JSON.parse(decrypted);
+            }
+            return undefined;
+        } catch (e) {
+            console.error("Failed to fetch/decrypt session", id, e);
+            return undefined;
+        }
     }
     async updateSession(session: Session) {
         await this.saveSession(session);

@@ -169,7 +169,25 @@ async function startServer() {
     res.json(events);
   });
 
+  // Security utility to prevent path traversal
+  const isSafeId = (id: any): boolean => {
+    return typeof id === 'string' && id.length > 0 && !id.includes('..') && !id.includes('/') && !id.includes('\\');
+  };
+
   // API Routes for Server-side storage
+  app.get("/api/storage/item/:id", async (req, res) => {
+    try {
+      const id = req.params.id;
+      if (!isSafeId(id)) {
+        return res.status(400).json({ error: "Invalid id" });
+      }
+      const content = await fs.readFile(path.join(STORAGE_DIR, `${id}.json`), 'utf-8');
+      res.json({ id, data: JSON.parse(content) });
+    } catch {
+      res.status(404).json({ error: "Not found" });
+    }
+  });
+
   app.get("/api/storage/list", async (req, res) => {
     try {
       const files = await fs.readdir(STORAGE_DIR);
