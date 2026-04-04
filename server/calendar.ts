@@ -1,4 +1,3 @@
-import axios from 'axios';
 import { OAuth2Client } from 'google-auth-library';
 
 // Google Calendar Config
@@ -30,10 +29,11 @@ export const CalendarBackend = {
     return tokens;
   },
   getGoogleEvents: async (accessToken: string) => {
-    const response = await axios.get('https://www.googleapis.com/calendar/v3/calendars/primary/events', {
+    const response = await fetch('https://www.googleapis.com/calendar/v3/calendars/primary/events', {
       headers: { Authorization: `Bearer ${accessToken}` },
     });
-    return response.data.items;
+    const data = await response.json();
+    return data.items;
   },
 
   // Microsoft
@@ -55,16 +55,19 @@ export const CalendarBackend = {
       redirect_uri: redirectUri,
       grant_type: 'authorization_code',
     });
-    const response = await axios.post(MS_TOKEN_URL, params.toString(), {
+    const response = await fetch(MS_TOKEN_URL, {
+      method: 'POST',
+      body: params.toString(),
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     });
-    return response.data;
+    return await response.json();
   },
   getMicrosoftEvents: async (accessToken: string) => {
-    const response = await axios.get('https://graph.microsoft.com/v1.0/me/calendar/events', {
+    const response = await fetch('https://graph.microsoft.com/v1.0/me/calendar/events', {
       headers: { Authorization: `Bearer ${accessToken}` },
     });
-    return response.data.value;
+    const data = await response.json();
+    return data.value;
   },
 
   // Notion
@@ -79,31 +82,37 @@ export const CalendarBackend = {
   },
   exchangeNotionCode: async (code: string, redirectUri: string) => {
     const auth = Buffer.from(`${process.env.NOTION_CLIENT_ID}:${process.env.NOTION_CLIENT_SECRET}`).toString('base64');
-    const response = await axios.post(NOTION_TOKEN_URL, {
-      grant_type: 'authorization_code',
-      code,
-      redirect_uri: redirectUri,
-    }, {
+    const response = await fetch(NOTION_TOKEN_URL, {
+      method: 'POST',
+      body: JSON.stringify({
+        grant_type: 'authorization_code',
+        code,
+        redirect_uri: redirectUri,
+      }),
       headers: {
         Authorization: `Basic ${auth}`,
         'Content-Type': 'application/json',
       },
     });
-    return response.data;
+    return await response.json();
   },
   getNotionEvents: async (accessToken: string) => {
     // Notion doesn't have a direct "Calendar" API like Google/MS.
     // Usually, you query a database that is used as a calendar.
     // For this integration, we'll list databases the user has shared.
-    const response = await axios.post('https://api.notion.com/v1/search', {
-      filter: { property: 'object', value: 'database' },
-    }, {
+    const response = await fetch('https://api.notion.com/v1/search', {
+      method: 'POST',
+      body: JSON.stringify({
+        filter: { property: 'object', value: 'database' },
+      }),
       headers: {
         Authorization: `Bearer ${accessToken}`,
         'Notion-Version': '2022-06-28',
+        'Content-Type': 'application/json',
       },
     });
-    return response.data.results;
+    const data = await response.json();
+    return data.results;
   },
 
   // Apple (CalDAV)
@@ -112,6 +121,7 @@ export const CalendarBackend = {
     // In a real app, we'd use a library like 'dav' or 'ical.js'.
     // For now, we'll return a placeholder to show it's connected.
     console.log(`Fetching Apple events for ${config.user} at ${config.url}`);
+    await new Promise(resolve => setTimeout(resolve, 500)); // Simulate 500ms network delay
     return [
       {
         id: 'apple-placeholder-1',
