@@ -6,6 +6,14 @@ import session from "express-session";
 import cookieParser from "cookie-parser";
 import { CalendarBackend } from "./server/calendar";
 
+// Utility to prevent path traversal
+function isSafeId(id: any): boolean {
+  if (typeof id !== 'string' || id.trim() === '') return false;
+  // Prevent directory traversal attacks
+  if (id.includes('..') || id.includes('/') || id.includes('\\')) return false;
+  return true;
+}
+
 async function startServer() {
   const app = express();
   const PORT = 3000;
@@ -190,6 +198,11 @@ async function startServer() {
   app.post("/api/storage/save", async (req, res) => {
     try {
       const { id, data } = req.body;
+
+      if (!isSafeId(id)) {
+        return res.status(400).json({ error: "Invalid ID provided" });
+      }
+
       await fs.writeFile(path.join(STORAGE_DIR, `${id}.json`), JSON.stringify(data, null, 2));
       res.json({ success: true });
     } catch {
@@ -199,6 +212,10 @@ async function startServer() {
 
   app.delete("/api/storage/:id", async (req, res) => {
     try {
+      if (!isSafeId(req.params.id)) {
+        return res.status(400).json({ error: "Invalid ID provided" });
+      }
+
       await fs.unlink(path.join(STORAGE_DIR, `${req.params.id}.json`));
       res.json({ success: true });
     } catch {
