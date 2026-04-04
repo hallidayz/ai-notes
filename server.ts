@@ -4,6 +4,7 @@ import path from "path";
 import fs from "fs/promises";
 import session from "express-session";
 import cookieParser from "cookie-parser";
+import crypto from "crypto";
 import { CalendarBackend } from "./server/calendar";
 
 async function startServer() {
@@ -13,7 +14,7 @@ async function startServer() {
   app.use(express.json({ limit: '50mb' }));
   app.use(cookieParser());
   app.use(session({
-    secret: 'ai-notes-secret',
+    secret: process.env.SESSION_SECRET || crypto.randomBytes(32).toString('hex'),
     resave: false,
     saveUninitialized: true,
     cookie: { secure: true, sameSite: 'none', httpOnly: true }
