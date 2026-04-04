@@ -6,6 +6,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Menu, Sparkles, MoreHorizontal } from 'lucide-react';
 import { CommandPalette } from './CommandPalette';
+import { GhostTextService } from '../services/GhostTextService';
 
 // CryptoService - simplified version for encryption/decryption
 class CryptoService {
@@ -120,6 +121,8 @@ export const EditorArea: React.FC<EditorAreaProps> = ({
     const [lastSaved, setLastSaved] = useState<Date | null>(null);
     const titleRef = useRef<HTMLDivElement>(null);
     const contentRef = useRef<HTMLDivElement>(null);
+    const ghostTextTimerRef = useRef<NodeJS.Timeout | null>(null);
+    const activeGenerationIdRef = useRef<number>(0);
     const [isDarkMode, setIsDarkMode] = useState(false);
 
     useEffect(() => {
@@ -216,11 +219,57 @@ export const EditorArea: React.FC<EditorAreaProps> = ({
     const handleContentChange = (e: React.FormEvent<HTMLDivElement>) => {
         const newContent = e.currentTarget.textContent || '';
         setContent(newContent);
+        setGhostText('');
         
-        // TODO: Integrate with AI service to generate ghost text suggestions
-        // For now, just clear ghost text when user types
-        if (newContent.length > 0) {
+        // Increment generation ID to invalidate any pending AI responses
+        const currentGenId = ++activeGenerationIdRef.current;
+
+        if (ghostTextTimerRef.current) {
+            clearTimeout(ghostTextTimerRef.current);
+        }
+
+        if (newContent.trim().length > 0) {
+            ghostTextTimerRef.current = setTimeout(async () => {
+                const suggestion = await GhostTextService.getInstance().generateSuggestion(newContent);
+
+                // Only set suggestion if this generation is still the active one
+                if (activeGenerationIdRef.current === currentGenId) {
+                    setGhostText(suggestion);
+                }
+            }, 800); // 800ms debounce
+        }
+    };
+
+    // Cleanup timer on unmount
+    useEffect(() => {
+        return () => {
+            if (ghostTextTimerRef.current) {
+                clearTimeout(ghostTextTimerRef.current);
+            }
+        };
+    }, []);
+
+    const handleKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+        if (e.key === 'Tab' && ghostText) {
+            e.preventDefault(); // Prevent default tabbing behavior
+            const newContent = content + ghostText;
+            setContent(newContent);
             setGhostText('');
+            activeGenerationIdRef.current++; // Invalidate pending gens
+
+            // Move cursor to the end safely by creating a range containing all child nodes
+            setTimeout(() => {
+                const el = contentRef.current;
+                if (!el) return;
+
+                const range = document.createRange();
+                range.selectNodeContents(el);
+                range.collapse(false); // false means collapse to end
+
+                const sel = window.getSelection();
+                sel?.removeAllRanges();
+                sel?.addRange(range);
+            }, 0);
         }
     };
 
@@ -449,49 +498,73 @@ export const EditorArea: React.FC<EditorAreaProps> = ({
                                 fontSize: '18px',
                                 lineHeight: '1.7',
                                 color: isDarkMode ? '#cbd5e1' : '#4b5563',
-                                maxWidth: '100%'
+                                maxWidth: '100%',
+                                position: 'relative'
                             }}
                         >
                             <div
                                 ref={contentRef}
                                 contentEditable
                                 onInput={handleContentChange}
+                                onKeyDown={handleKeyDown}
                                 suppressContentEditableWarning
                                 style={{
                                     outline: 'none',
                                     minHeight: '200px',
-                                    color: isDarkMode ? '#cbd5e1' : '#4b5563'
+                                    color: isDarkMode ? '#cbd5e1' : '#4b5563',
+                                    whiteSpace: 'pre-wrap',
+                                    wordBreak: 'break-word',
+                                    position: 'relative',
+                                    zIndex: 1
                                 }}
                             >
                                 {content || ''}
                             </div>
-                        {ghostText && (
-                            <div
-                                style={{
-                                    color: isDarkMode ? '#4b5563' : '#d1d5db',
-                                    fontStyle: 'italic',
-                                    display: 'inline',
-                                    marginLeft: '4px'
-                                }}
-                            >
-                                {ghostText}
-                                <span
+
+                            {/* Ghost Text Overlay */}
+                            {ghostText && (
+                                <div
                                     style={{
-                                        fontSize: '11px',
-                                        color: isDarkMode ? '#6b7280' : '#9ca3af',
-                                        background: isDarkMode ? 'rgba(255, 255, 255, 0.1)' : '#f3f4f6',
-                                        padding: '2px 6px',
-                                        borderRadius: '4px',
-                                        border: isDarkMode ? '1px solid rgba(255, 255, 255, 0.1)' : '1px solid rgba(0, 0, 0, 0.1)',
-                                        marginLeft: '4px',
-                                        userSelect: 'none',
-                                        cursor: 'default'
+                                        position: 'absolute',
+                                        top: 0,
+                                        left: 0,
+                                        width: '100%',
+                                        height: '100%',
+                                        pointerEvents: 'none',
+                                        color: 'transparent', // Make the base text transparent
+                                        whiteSpace: 'pre-wrap',
+                                        wordBreak: 'break-word',
+                                        zIndex: 0
                                     }}
                                 >
-                                    TAB
-                                </span>
-                            </div>
-                        )}
+                                    {content || ''}
+                                    <span
+                                        style={{
+                                            color: isDarkMode ? '#4b5563' : '#d1d5db',
+                                            fontStyle: 'italic',
+                                            marginLeft: '4px'
+                                        }}
+                                    >
+                                        {ghostText}
+                                        <span
+                                            style={{
+                                                fontSize: '11px',
+                                                color: isDarkMode ? '#6b7280' : '#9ca3af',
+                                                background: isDarkMode ? 'rgba(255, 255, 255, 0.1)' : '#f3f4f6',
+                                                padding: '2px 6px',
+                                                borderRadius: '4px',
+                                                border: isDarkMode ? '1px solid rgba(255, 255, 255, 0.1)' : '1px solid rgba(0, 0, 0, 0.1)',
+                                                marginLeft: '4px',
+                                                userSelect: 'none',
+                                                verticalAlign: 'middle',
+                                                fontStyle: 'normal'
+                                            }}
+                                        >
+                                            TAB
+                                        </span>
+                                    </span>
+                                </div>
+                            )}
                         </div>
                     ) : (
                         <div
