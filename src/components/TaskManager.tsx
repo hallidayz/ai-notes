@@ -98,19 +98,20 @@ export const TaskManager: React.FC<TaskManagerProps> = ({
             };
             await onUpdateSession(updatedSession);
 
-            // Create tasks from action items
-            let addedCount = 0;
-            for (const item of results.action_items) {
-                const success = await onAddTask({
+            // Create tasks from action items concurrently
+            const addPromises = results.action_items.map((item: string) =>
+                onAddTask({
                     title: item,
                     priority: 'medium',
                     dueDate: null,
                     status: 'todo',
                     sessionId: session.id,
                     sessionName: session.sessionTitle
-                });
-                if (success) addedCount++;
-            }
+                })
+            );
+
+            const addResults = await Promise.all(addPromises);
+            const addedCount = addResults.filter(success => success).length;
 
             setSuccessMessage(`Successfully generated ${addedCount} tasks from session "${session.sessionTitle}"!`);
             setAnalysisSessionId(undefined);
