@@ -191,7 +191,7 @@ export const SessionDetailModal: React.FC<SessionDetailModalProps> = ({
 
         if (success) {
             const updatedTodos = [...decryptedTodoItems];
-            updatedTodos[todoIndex] = { ...todo, promotedToTaskId: Date.now() };
+            updatedTodos[todoIndex] = { ...todo, promotedAt: Date.now() };
             
             try {
                 const encryptedTodos = await CryptoService.encrypt(JSON.stringify(updatedTodos), pin);
@@ -345,7 +345,7 @@ export const SessionDetailModal: React.FC<SessionDetailModalProps> = ({
                                                 <input type="checkbox" readOnly checked={todo.completed} />
                                                 <span className="todo-text">{todo.text}</span>
                                             </div>
-                                            {todo.promotedToTaskId ? (
+                                            {todo.promotedAt ? (
                                                 <span className="task-promoted-badge">Tasked</span>
                                             ) : (
                                                 <button 

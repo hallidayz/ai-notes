@@ -7,7 +7,7 @@ export interface TranscriptChunk {
 export interface TodoItem {
     text: string;
     completed: boolean;
-    promotedToTaskId?: number;
+    promotedAt?: number;
 }
 
 export interface Session {
