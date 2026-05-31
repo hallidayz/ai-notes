@@ -183,10 +183,25 @@ export class OnDeviceAIService {
         const outlinePrompt = `Create an outline for this transcript: ${rawTranscript}`;
         const outlineResult = await analyzer(outlinePrompt, { max_new_tokens: 128 });
 
+        const rawTodoText = todoResult[0].generated_text || '';
+        const actionItems: string[] = [];
+        let start = 0;
+        while (true) {
+            const end = rawTodoText.indexOf('. ', start);
+            if (end === -1) {
+                const item = rawTodoText.slice(start).trim();
+                if (item.length > 0) actionItems.push(item);
+                break;
+            }
+            const item = rawTodoText.slice(start, end).trim();
+            if (item.length > 0) actionItems.push(item);
+            start = end + 2; // length of '. '
+        }
+
         return {
             transcript: transcriptChunks,
             summary: summaryResult[0].generated_text || 'No summary generated.',
-            action_items: (todoResult[0].generated_text || '').split('. ').filter((s: string) => s.trim().length > 0),
+            action_items: actionItems,
             outline: outlineResult[0].generated_text || 'No outline generated.'
         };
     }
