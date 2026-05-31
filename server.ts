@@ -6,6 +6,12 @@ import session from "express-session";
 import cookieParser from "cookie-parser";
 import { CalendarBackend } from "./server/calendar";
 
+function isSafeId(id: any): boolean {
+  if (typeof id !== 'string' || id.trim() === '') return false;
+  if (id.includes('..') || id.includes('/') || id.includes('\\')) return false;
+  return true;
+}
+
 async function startServer() {
   const app = express();
   const PORT = 3000;
@@ -190,6 +196,9 @@ async function startServer() {
   app.post("/api/storage/save", async (req, res) => {
     try {
       const { id, data } = req.body;
+      if (!isSafeId(id)) {
+        return res.status(400).json({ error: "Invalid ID" });
+      }
       await fs.writeFile(path.join(STORAGE_DIR, `${id}.json`), JSON.stringify(data, null, 2));
       res.json({ success: true });
     } catch {
@@ -199,7 +208,11 @@ async function startServer() {
 
   app.delete("/api/storage/:id", async (req, res) => {
     try {
-      await fs.unlink(path.join(STORAGE_DIR, `${req.params.id}.json`));
+      const id = req.params.id;
+      if (!isSafeId(id)) {
+        return res.status(400).json({ error: "Invalid ID" });
+      }
+      await fs.unlink(path.join(STORAGE_DIR, `${id}.json`));
       res.json({ success: true });
     } catch {
       res.status(500).json({ error: "Failed to delete from storage" });
