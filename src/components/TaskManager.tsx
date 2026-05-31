@@ -223,7 +223,7 @@ export const TaskManager: React.FC<TaskManagerProps> = ({
             </div>
 
             <div className="tasks-list">
-                <h3>Your Tasks ({tasks.filter(t => t.status !== 'done').length} active)</h3>
+                <h3>Your Tasks ({tasks.reduce((count, t) => t.status !== 'done' ? count + 1 : count, 0)} active)</h3>
                 {sortedTasks.length === 0 ? (
                     <div className="empty-state">No tasks yet. Add one above or promote an action item from a session!</div>
                 ) : (
