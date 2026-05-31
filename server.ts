@@ -13,7 +13,7 @@ async function startServer() {
   app.use(express.json({ limit: '50mb' }));
   app.use(cookieParser());
   app.use(session({
-    secret: 'ai-notes-secret',
+    secret: process.env.SESSION_SECRET!,
     resave: false,
     saveUninitialized: true,
     cookie: { secure: true, sameSite: 'none', httpOnly: true }
