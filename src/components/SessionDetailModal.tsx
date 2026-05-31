@@ -178,7 +178,7 @@ export const SessionDetailModal: React.FC<SessionDetailModalProps> = ({
         }
     };
     
-    const handlePromoteTodoToTask = async (todo: TodoItem, todoIndex: number) => {
+    const handlePromoteTodoToTask = useCallback(async (todo: TodoItem, todoIndex: number) => {
         const success = await onAddTask({
             title: todo.text,
             dueDate: null,
@@ -201,9 +201,9 @@ export const SessionDetailModal: React.FC<SessionDetailModalProps> = ({
                 console.error("Failed to encrypt todos", err);
             }
         }
-    };
+    }, [onAddTask, session, decryptedTodoItems, pin, audioBlob, onUpdate]);
     
-    const handleTodoToggle = async (index: number) => {
+    const handleTodoToggle = useCallback(async (index: number) => {
         const updatedTodos = [...decryptedTodoItems];
         updatedTodos[index].completed = !updatedTodos[index].completed;
         
@@ -214,7 +214,25 @@ export const SessionDetailModal: React.FC<SessionDetailModalProps> = ({
         } catch (err) {
             console.error("Failed to encrypt todos", err);
         }
-    };
+    }, [decryptedTodoItems, pin, session, audioBlob, onUpdate]);
+
+    const onTodoToggleClick = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
+        const indexStr = e.currentTarget.dataset.index;
+        if (indexStr !== undefined) {
+            handleTodoToggle(parseInt(indexStr, 10));
+        }
+    }, [handleTodoToggle]);
+
+    const onPromoteClick = useCallback((e: React.MouseEvent<HTMLButtonElement>) => {
+        const indexStr = e.currentTarget.dataset.index;
+        if (indexStr !== undefined) {
+            const index = parseInt(indexStr, 10);
+            const todo = decryptedTodoItems[index];
+            if (todo) {
+                handlePromoteTodoToTask(todo, index);
+            }
+        }
+    }, [decryptedTodoItems, handlePromoteTodoToTask]);
 
     const handleRunOnDeviceAnalysis = useCallback(async () => {
         setAiAnalysisStatus('in_progress');
@@ -341,7 +359,7 @@ export const SessionDetailModal: React.FC<SessionDetailModalProps> = ({
                                 <ul className="action-items-list">
                                     {decryptedTodoItems.map((todo, index) => (
                                         <li key={index} className={`todo-item ${todo.completed ? 'completed' : ''}`}>
-                                            <div className="todo-content" onClick={() => handleTodoToggle(index)}>
+                                            <div className="todo-content" data-index={index} onClick={onTodoToggleClick}>
                                                 <input type="checkbox" readOnly checked={todo.completed} />
                                                 <span className="todo-text">{todo.text}</span>
                                             </div>
@@ -351,7 +369,8 @@ export const SessionDetailModal: React.FC<SessionDetailModalProps> = ({
                                                 <button 
                                                     className="btn-promote-task" 
                                                     title="Promote to Task" 
-                                                    onClick={() => handlePromoteTodoToTask(todo, index)}>
+                                                    data-index={index}
+                                                    onClick={onPromoteClick}>
                                                     &#x2795;
                                                 </button>
                                             )}
