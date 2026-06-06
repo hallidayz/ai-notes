@@ -12,7 +12,6 @@ export class IndexedDBProvider implements StorageProvider {
     async saveAudioBlob(sessionId: number, blob: Blob) { return this.db.saveAudioBlob(sessionId, blob); }
     async getAudioBlob(sessionId: number) { return this.db.getAudioBlob(sessionId); }
     async saveTask(task: Task) { return this.db.addTask(task); }
-    async saveTasks(tasks: Task[]) { return this.db.addTasks(tasks); }
     async getAllTasks() { return this.db.getAllTasks(); }
     async updateTask(task: Task) { return this.db.updateTask(task); }
     async deleteTask(id: number) { return this.db.deleteTask(id); }
@@ -41,35 +40,36 @@ export class ServerStorageProvider implements StorageProvider {
         const { CryptoService } = await import('./cryptoService');
         const res = await fetch('/api/storage/list');
         const items = await res.json();
-        const sessionPromises = items.map(async (item: any) => {
+        const sessions: Session[] = [];
+        for (const item of items) {
             if (item.id !== 'tasks_list' && item.id !== 'calendar_connections' && item.data.encrypted) {
                 try {
                     const decrypted = await CryptoService.decrypt(item.data.encrypted, this.pin);
-                    return JSON.parse(decrypted);
+                    sessions.push(JSON.parse(decrypted));
                 } catch (e) {
                     console.error("Failed to decrypt session", item.id, e);
-                    return null;
                 }
             }
-            return null;
-        });
-        const resolvedSessions = await Promise.all(sessionPromises);
-        return resolvedSessions.filter(Boolean) as Session[];
+        }
+        return sessions;
     }
     async getSession(id: number) {
         const { CryptoService } = await import('./cryptoService');
         try {
             const res = await fetch(`/api/storage/item/${id}`);
-            if (!res.ok) return undefined;
+            if (!res.ok) {
+                return undefined;
+            }
             const item = await res.json();
-            if (item?.data?.encrypted) {
+            if (item.data && item.data.encrypted) {
                 const decrypted = await CryptoService.decrypt(item.data.encrypted, this.pin);
                 return JSON.parse(decrypted);
             }
+            return undefined;
         } catch (e) {
             console.error("Failed to fetch/decrypt session", id, e);
+            return undefined;
         }
-        return undefined;
     }
     async updateSession(session: Session) {
         await this.saveSession(session);
@@ -120,27 +120,6 @@ export class ServerStorageProvider implements StorageProvider {
             body: JSON.stringify({ id: 'tasks_list', data: { encrypted: encryptedData } })
         });
         return id;
-    }
-    async saveTasks(tasksToSave: Task[]) {
-        const { CryptoService } = await import('./cryptoService');
-        const tasks = await this.getAllTasks();
-
-        const ids: number[] = [];
-        let timeBase = Date.now();
-
-        for (const task of tasksToSave) {
-            const id = task.id || ++timeBase;
-            ids.push(id);
-            tasks.push({ ...task, id });
-        }
-
-        const encryptedData = await CryptoService.encrypt(JSON.stringify(tasks), this.pin);
-        await fetch('/api/storage/save', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ id: 'tasks_list', data: { encrypted: encryptedData } })
-        });
-        return ids;
     }
     async getAllTasks() {
         const { CryptoService } = await import('./cryptoService');
