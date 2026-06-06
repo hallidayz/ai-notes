@@ -126,9 +126,9 @@ async function startServer() {
       return res.json([]);
     }
 
-    for (const conn of connections) {
+    await Promise.all(connections.map(async (conn) => {
       const { provider, tokens } = conn;
-      if (!tokens?.access_token) continue;
+      if (!tokens?.access_token) return;
 
       try {
         if (provider === 'google') {
@@ -164,7 +164,7 @@ async function startServer() {
       } catch (e) {
         console.error(`${provider} events fetch error`, e);
       }
-    }
+    }));
 
     res.json(events);
   });
