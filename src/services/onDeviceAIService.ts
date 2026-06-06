@@ -1,12 +1,12 @@
 
-import { pipeline, env } from '@xenova/transformers';
+import { pipeline, env, AutomaticSpeechRecognitionPipeline, Text2TextGenerationPipeline } from '@xenova/transformers';
 import { GoogleGenAI, Type } from "@google/genai";
 import { TranscriptChunk, ModelConfig } from '../types';
 
 export class OnDeviceAIService {
     private static instance: OnDeviceAIService | null = null;
-    private transcriptionPipe: unknown = null;
-    private analysisPipe: unknown = null;
+    private transcriptionPipe: AutomaticSpeechRecognitionPipeline | null = null;
+    private analysisPipe: Text2TextGenerationPipeline | null = null;
     private currentConfig: ModelConfig = {
         transcriptionModelId: 'whisper-tiny-en',
         analysisModelId: 'flan-t5-small'
@@ -56,10 +56,9 @@ export class OnDeviceAIService {
         if (!this.transcriptionPipe) {
             this.transcriptionPipe = await pipeline('automatic-speech-recognition', modelPath, {
                 progress_callback,
-            });
+            }) as AutomaticSpeechRecognitionPipeline;
         }
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        return this.transcriptionPipe as any;
+        return this.transcriptionPipe;
     }
 
     private async getAnalysisPipeline(progress_callback?: (progress: { status: string; progress?: number }) => void) {
@@ -67,10 +66,9 @@ export class OnDeviceAIService {
         if (!this.analysisPipe) {
             this.analysisPipe = await pipeline('text2text-generation', modelPath, {
                 progress_callback,
-            });
+            }) as Text2TextGenerationPipeline;
         }
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        return this.analysisPipe as any;
+        return this.analysisPipe;
     }
 
     public async analyze(
@@ -86,7 +84,8 @@ export class OnDeviceAIService {
         });
 
         progressCallback('Transcribing audio...');
-        const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
         const arrayBuffer = await audioBlob.arrayBuffer();
         const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
         
@@ -94,7 +93,8 @@ export class OnDeviceAIService {
             chunk_length_s: 30,
             stride_length_s: 5,
             return_timestamps: true,
-        });
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        }) as any;
 
         const rawTranscript = (transcription.chunks || []).map((chunk: { text: string }) => chunk.text).join(' ');
         
@@ -175,13 +175,16 @@ export class OnDeviceAIService {
         progressCallback('Analyzing transcript (fallback)...');
         
         const summaryPrompt = `Summarize this ${industry} transcript: ${rawTranscript}`;
-        const summaryResult = await analyzer(summaryPrompt, { max_new_tokens: 128 });
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const summaryResult = await analyzer(summaryPrompt, { max_new_tokens: 128 }) as any;
         
         const todoPrompt = `Extract action items from this transcript: ${rawTranscript}`;
-        const todoResult = await analyzer(todoPrompt, { max_new_tokens: 128 });
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const todoResult = await analyzer(todoPrompt, { max_new_tokens: 128 }) as any;
         
         const outlinePrompt = `Create an outline for this transcript: ${rawTranscript}`;
-        const outlineResult = await analyzer(outlinePrompt, { max_new_tokens: 128 });
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const outlineResult = await analyzer(outlinePrompt, { max_new_tokens: 128 }) as any;
 
         return {
             transcript: transcriptChunks,
