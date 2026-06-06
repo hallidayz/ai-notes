@@ -12,6 +12,7 @@ export class IndexedDBProvider implements StorageProvider {
     async saveAudioBlob(sessionId: number, blob: Blob) { return this.db.saveAudioBlob(sessionId, blob); }
     async getAudioBlob(sessionId: number) { return this.db.getAudioBlob(sessionId); }
     async saveTask(task: Task) { return this.db.addTask(task); }
+    async saveTasks(tasks: Task[]) { return this.db.addTasks(tasks); }
     async getAllTasks() { return this.db.getAllTasks(); }
     async updateTask(task: Task) { return this.db.updateTask(task); }
     async deleteTask(id: number) { return this.db.deleteTask(id); }
@@ -54,8 +55,19 @@ export class ServerStorageProvider implements StorageProvider {
         return sessions;
     }
     async getSession(id: number) {
-        const sessions = await this.getAllSessions();
-        return sessions.find((s: Session) => s.id === id);
+        const { CryptoService } = await import('./cryptoService');
+        try {
+            const res = await fetch(`/api/storage/item/${id}`);
+            if (!res.ok) return undefined;
+            const item = await res.json();
+            if (item?.data?.encrypted) {
+                const decrypted = await CryptoService.decrypt(item.data.encrypted, this.pin);
+                return JSON.parse(decrypted);
+            }
+        } catch (e) {
+            console.error("Failed to fetch/decrypt session", id, e);
+        }
+        return undefined;
     }
     async updateSession(session: Session) {
         await this.saveSession(session);
@@ -106,6 +118,27 @@ export class ServerStorageProvider implements StorageProvider {
             body: JSON.stringify({ id: 'tasks_list', data: { encrypted: encryptedData } })
         });
         return id;
+    }
+    async saveTasks(tasksToSave: Task[]) {
+        const { CryptoService } = await import('./cryptoService');
+        const tasks = await this.getAllTasks();
+
+        const ids: number[] = [];
+        let timeBase = Date.now();
+
+        for (const task of tasksToSave) {
+            const id = task.id || ++timeBase;
+            ids.push(id);
+            tasks.push({ ...task, id });
+        }
+
+        const encryptedData = await CryptoService.encrypt(JSON.stringify(tasks), this.pin);
+        await fetch('/api/storage/save', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id: 'tasks_list', data: { encrypted: encryptedData } })
+        });
+        return ids;
     }
     async getAllTasks() {
         const { CryptoService } = await import('./cryptoService');
