@@ -98,7 +98,7 @@ export const TaskManager: React.FC<TaskManagerProps> = ({
             };
             await onUpdateSession(updatedSession);
 
-            // Create tasks from action items
+            // Create tasks from action items concurrently
             const addPromises = results.action_items.map((item: string) =>
                 onAddTask({
                     title: item,
@@ -109,6 +109,7 @@ export const TaskManager: React.FC<TaskManagerProps> = ({
                     sessionName: session.sessionTitle
                 })
             );
+
             const addResults = await Promise.all(addPromises);
             const addedCount = addResults.filter(success => success).length;
 
