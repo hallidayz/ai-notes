@@ -4,9 +4,6 @@ import { Session, Task, TodoItem, StorageProvider, TranscriptChunk } from '../ty
 import { CryptoService } from '../services/cryptoService';
 import { onDeviceAIService } from '../services/onDeviceAIService';
 import { AudioPlayer } from './AudioPlayer';
-import { ActionItemsView } from './ActionItemsView';
-import { TranscriptView } from './TranscriptView';
-import { NotesEditor } from './NotesEditor';
 
 interface SessionDetailModalProps {
     session: Session;
@@ -27,6 +24,10 @@ export const SessionDetailModal: React.FC<SessionDetailModalProps> = ({
     const [isDecrypting, setIsDecrypting] = useState(true);
     const [audioUrl, setAudioUrl] = useState<string | null>(null);
     const [audioBlob, setAudioBlob] = useState<Blob | null>(null);
+    const [isEditingNotes, setIsEditingNotes] = useState(false);
+    const [editedNotes, setEditedNotes] = useState('');
+    const [speakerMap, setSpeakerMap] = useState<{[key: string]: string}>({});
+    const [editingSpeaker, setEditingSpeaker] = useState<{chunkIndex: number, oldName: string} | null>(null);
     const [aiAnalysisStatus, setAiAnalysisStatus] = useState<'idle' | 'in_progress' | 'failed' | 'complete'>('idle');
     const [aiProgress, setAiProgress] = useState({ status: '', progress: 0 });
     const [decryptedParticipants, setDecryptedParticipants] = useState('');
@@ -43,6 +44,7 @@ export const SessionDetailModal: React.FC<SessionDetailModalProps> = ({
                 // Decrypt notes
                 const notes = await CryptoService.decrypt(session.notes, pin);
                 setDecryptedNotes(notes);
+                setEditedNotes(notes);
 
                 // Decrypt participants if present
                 if (session.participants) {
@@ -98,7 +100,7 @@ export const SessionDetailModal: React.FC<SessionDetailModalProps> = ({
                     setDecryptedOutline('');
                 }
 
-                // Decrypt action items if present
+                // Decrypt todoItems if present
                 if (session.todoItems) {
                     if (typeof session.todoItems === 'string') {
                         try {
@@ -138,8 +140,16 @@ export const SessionDetailModal: React.FC<SessionDetailModalProps> = ({
         };
     }, [session, pin, storageProvider]);
 
+    useEffect(() => {
+        const uniqueSpeakers = [...new Set(decryptedTranscript.map(c => c.speaker))];
+        const initialMap: {[key: string]: string} = {};
+        uniqueSpeakers.forEach(speaker => {
+            initialMap[speaker] = speaker;
+        });
+        setSpeakerMap(initialMap);
+    }, [decryptedTranscript]);
 
-    const handleSaveNotes = async (editedNotes: string) => {
+    const handleSaveNotes = async () => {
         try {
             const { CryptoService } = await import('../services/cryptoService');
             const encryptedNotes = await CryptoService.encrypt(editedNotes, pin);
@@ -157,17 +167,18 @@ export const SessionDetailModal: React.FC<SessionDetailModalProps> = ({
                 participants: encryptedParticipants,
                 transcript: encryptedTranscript as unknown as TranscriptChunk[],
                 summary: encryptedSummary,
-                outline: encryptedOutline,
+                outline: encryptedOutline as unknown as OutlineItem[],
                 todoItems: encryptedTodos as unknown as TodoItem[],
                 audioBlob: audioBlob || undefined 
             });
             setDecryptedNotes(editedNotes);
+            setIsEditingNotes(false);
         } catch {
             showStatus('Failed to save notes.', 'error');
         }
     };
     
-    const handlePromoteTodoToTask = async (todo: TodoItem, todoIndex: number) => {
+    const handlePromoteTodoToTask = useCallback(async (todo: TodoItem, todoIndex: number) => {
         const success = await onAddTask({
             title: todo.text,
             dueDate: null,
@@ -190,9 +201,9 @@ export const SessionDetailModal: React.FC<SessionDetailModalProps> = ({
                 console.error("Failed to encrypt todos", err);
             }
         }
-    };
+    }, [onAddTask, session, decryptedTodoItems, pin, audioBlob, onUpdate]);
     
-    const handleTodoToggle = async (index: number) => {
+    const handleTodoToggle = useCallback(async (index: number) => {
         const updatedTodos = [...decryptedTodoItems];
         updatedTodos[index].completed = !updatedTodos[index].completed;
         
@@ -203,18 +214,25 @@ export const SessionDetailModal: React.FC<SessionDetailModalProps> = ({
         } catch (err) {
             console.error("Failed to encrypt todos", err);
         }
-    };
+    }, [decryptedTodoItems, pin, session, audioBlob, onUpdate]);
 
-
-    const handleUpdateTranscript = async (newTranscript: TranscriptChunk[]) => {
-        try {
-            const encryptedTranscript = await CryptoService.encrypt(JSON.stringify(newTranscript), pin);
-            onUpdate({ ...session, transcript: encryptedTranscript as unknown as TranscriptChunk[], audioBlob: audioBlob || undefined });
-            setDecryptedTranscript(newTranscript);
-        } catch (err) {
-            console.error("Failed to encrypt transcript", err);
+    const onTodoToggleClick = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
+        const indexStr = e.currentTarget.dataset.index;
+        if (indexStr !== undefined) {
+            handleTodoToggle(parseInt(indexStr, 10));
         }
-    };
+    }, [handleTodoToggle]);
+
+    const onPromoteClick = useCallback((e: React.MouseEvent<HTMLButtonElement>) => {
+        const indexStr = e.currentTarget.dataset.index;
+        if (indexStr !== undefined) {
+            const index = parseInt(indexStr, 10);
+            const todo = decryptedTodoItems[index];
+            if (todo) {
+                handlePromoteTodoToTask(todo, index);
+            }
+        }
+    }, [decryptedTodoItems, handlePromoteTodoToTask]);
 
     const handleRunOnDeviceAnalysis = useCallback(async () => {
         setAiAnalysisStatus('in_progress');
@@ -257,7 +275,38 @@ export const SessionDetailModal: React.FC<SessionDetailModalProps> = ({
             onUpdate({ ...session, analysisStatus: 'failed', audioBlob: audioBlob || undefined });
         }
     }, [audioBlob, industry, onUpdate, session, pin]);
-return (
+
+    const handleSpeakerNameChange = async (newName: string) => {
+        if (!editingSpeaker) return;
+        
+        const { oldName } = editingSpeaker;
+        const newMap = { ...speakerMap, [oldName]: newName };
+        setSpeakerMap(newMap);
+
+        const newTranscript = decryptedTranscript.map(chunk => {
+            if (chunk.speaker === oldName) {
+                return { ...chunk, speaker: newName };
+            }
+            return chunk;
+        });
+
+        try {
+            const encryptedTranscript = await CryptoService.encrypt(JSON.stringify(newTranscript), pin);
+            onUpdate({ ...session, transcript: encryptedTranscript as unknown as TranscriptChunk[], audioBlob: audioBlob || undefined });
+            setDecryptedTranscript(newTranscript);
+        } catch (err) {
+            console.error("Failed to encrypt transcript", err);
+        }
+        setEditingSpeaker(null);
+    };
+
+    const getSpeakerClass = (speaker: string) => {
+        const speakers = Object.keys(speakerMap);
+        const index = speakers.indexOf(speaker);
+        return `speaker-style-${(index % 5) + 1}`;
+    };
+
+    return (
         <div className="modal active" onClick={onClose}>
             <div className="modal-content" onClick={e => e.stopPropagation()}>
                 <button className="close-btn" onClick={onClose}>&times;</button>
@@ -305,7 +354,30 @@ return (
                             <p>{decryptedSummary}</p>
                         </div>
                          {decryptedTodoItems && decryptedTodoItems.length > 0 && (
-                            <ActionItemsView todoItems={decryptedTodoItems} onToggle={handleTodoToggle} onPromote={handlePromoteTodoToTask} />
+                            <div className="analysis-subsection">
+                                <h4>&#x2705; Action Items</h4>
+                                <ul className="action-items-list">
+                                    {decryptedTodoItems.map((todo, index) => (
+                                        <li key={index} className={`todo-item ${todo.completed ? 'completed' : ''}`}>
+                                            <div className="todo-content" data-index={index} onClick={onTodoToggleClick}>
+                                                <input type="checkbox" readOnly checked={todo.completed} />
+                                                <span className="todo-text">{todo.text}</span>
+                                            </div>
+                                            {todo.promotedToTaskId ? (
+                                                <span className="task-promoted-badge">Tasked</span>
+                                            ) : (
+                                                <button 
+                                                    className="btn-promote-task" 
+                                                    title="Promote to Task" 
+                                                    data-index={index}
+                                                    onClick={onPromoteClick}>
+                                                    &#x2795;
+                                                </button>
+                                            )}
+                                        </li>
+                                    ))}
+                                </ul>
+                            </div>
                         )}
                         {decryptedOutline && (
                              <div className="analysis-subsection">
@@ -316,9 +388,56 @@ return (
                     </div>
                 )}
 
-                <NotesEditor notes={decryptedNotes} isDecrypting={isDecrypting} onSave={handleSaveNotes} />
+                <h3>Notes</h3>
+                {isDecrypting ? (
+                    <div className="loading">Decrypting...</div>
+                ) : (
+                    isEditingNotes ? (
+                        <div>
+                            <textarea value={editedNotes} onChange={e => setEditedNotes(e.target.value)} rows={8} style={{ width: '100%' }} />
+                            <div style={{ display: 'flex', gap: '10px', marginTop: '10px' }}>
+                                <button className="btn-primary" onClick={handleSaveNotes}>Save</button>
+                                <button className="btn-stop" onClick={() => setIsEditingNotes(false)}>Cancel</button>
+                            </div>
+                        </div>
+                    ) : (
+                        <div>
+                            <div className="transcript" style={{ whiteSpace: 'pre-wrap' }} onClick={() => setIsEditingNotes(true)}>
+                                {decryptedNotes || <span style={{color: '#94a3b8'}}>Click to add notes...</span>}
+                            </div>
+                        </div>
+                    )
+                )}
                 
-                <TranscriptView transcript={decryptedTranscript} onUpdateTranscript={handleUpdateTranscript} />
+                {decryptedTranscript && decryptedTranscript.length > 0 && (
+                    <>
+                        <h3>Transcript</h3>
+                        <div className="transcript">
+                            {decryptedTranscript.map((chunk, index) => (
+                                <div key={index} className={`transcript-chunk ${getSpeakerClass(chunk.speaker)}`}>
+                                   {editingSpeaker?.chunkIndex === index ? (
+                                        <input
+                                            type="text"
+                                            defaultValue={editingSpeaker.oldName}
+                                            onBlur={(e) => handleSpeakerNameChange(e.target.value)}
+                                            onKeyDown={(e) => e.key === 'Enter' && handleSpeakerNameChange(e.currentTarget.value)}
+                                            autoFocus
+                                            className="speaker-input"
+                                        />
+                                   ) : (
+                                       <span
+                                            className="speaker-label editable"
+                                            onClick={() => setEditingSpeaker({ chunkIndex: index, oldName: chunk.speaker })}
+                                        >
+                                           {speakerMap[chunk.speaker] || chunk.speaker}:
+                                        </span>
+                                   )}
+                                    <p>{chunk.text}</p>
+                                </div>
+                            ))}
+                        </div>
+                    </>
+                )}
 
                 <div style={{ marginTop: '24px', display: 'flex', justifyContent: 'flex-end' }}>
                     <button className="btn-danger" onClick={() => { onDelete(session.id!); onClose(); }}>Delete Session</button>
