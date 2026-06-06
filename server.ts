@@ -121,51 +121,54 @@ async function startServer() {
   // Calendar Data Routes
   app.post("/api/calendar/events", async (req, res) => {
     const { connections } = req.body; // Array of { provider, tokens }
-    const events: { id: string, title: string, start?: string, end?: string, provider: string, isDatabase?: boolean }[] = [];
 
     if (!connections || !Array.isArray(connections)) {
       return res.json([]);
     }
 
-    for (const conn of connections) {
+    const eventsPromises = connections.map(async (conn) => {
       const { provider, tokens } = conn;
-      if (!tokens?.access_token) continue;
+      if (!tokens?.access_token && provider !== 'apple') return [];
 
       try {
         if (provider === 'google') {
           const gEvents = await CalendarBackend.getGoogleEvents(tokens.access_token);
-          events.push(...gEvents.map((e: { id: string, summary: string, start: { dateTime?: string, date?: string }, end: { dateTime?: string, date?: string } }) => ({
+          return gEvents.map((e: { id: string, summary: string, start: { dateTime?: string, date?: string }, end: { dateTime?: string, date?: string } }) => ({
             id: e.id,
             title: e.summary,
             start: e.start.dateTime || e.start.date,
             end: e.end.dateTime || e.end.date,
             provider: 'google'
-          })));
+          }));
         } else if (provider === 'microsoft') {
           const mEvents = await CalendarBackend.getMicrosoftEvents(tokens.access_token);
-          events.push(...mEvents.map((e: { id: string, subject: string, start: { dateTime: string }, end: { dateTime: string } }) => ({
+          return mEvents.map((e: { id: string, subject: string, start: { dateTime: string }, end: { dateTime: string } }) => ({
             id: e.id,
             title: e.subject,
             start: e.start.dateTime,
             end: e.end.dateTime,
             provider: 'microsoft'
-          })));
+          }));
         } else if (provider === 'notion') {
           const nDatabases = await CalendarBackend.getNotionEvents(tokens.access_token);
-          events.push(...nDatabases.map((d: { id: string, title?: { plain_text: string }[] }) => ({
+          return nDatabases.map((d: { id: string, title?: { plain_text: string }[] }) => ({
             id: d.id,
             title: d.title?.[0]?.plain_text || "Untitled Notion DB",
             provider: 'notion',
             isDatabase: true
-          })));
+          }));
         } else if (provider === 'apple') {
           const aEvents = await CalendarBackend.getAppleEvents(tokens);
-          events.push(...aEvents);
+          return aEvents;
         }
       } catch (e) {
         console.error(`${provider} events fetch error`, e);
       }
-    }
+      return [];
+    });
+
+    const results = await Promise.all(eventsPromises);
+    const events = results.flat();
 
     res.json(events);
   });
