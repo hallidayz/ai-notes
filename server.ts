@@ -43,7 +43,7 @@ async function startServer() {
                 type: 'OAUTH_AUTH_SUCCESS', 
                 provider: 'google', 
                 tokens: ${JSON.stringify(tokens)} 
-              }, '*');
+              }, window.location.origin);
               window.close();
             </script>
             <p>Authentication successful. This window should close automatically.</p>
@@ -74,7 +74,7 @@ async function startServer() {
                 type: 'OAUTH_AUTH_SUCCESS', 
                 provider: 'microsoft', 
                 tokens: ${JSON.stringify(tokens)} 
-              }, '*');
+              }, window.location.origin);
               window.close();
             </script>
             <p>Authentication successful. This window should close automatically.</p>
@@ -105,7 +105,7 @@ async function startServer() {
                 type: 'OAUTH_AUTH_SUCCESS', 
                 provider: 'notion', 
                 tokens: ${JSON.stringify(tokens)} 
-              }, '*');
+              }, window.location.origin);
               window.close();
             </script>
             <p>Authentication successful. This window should close automatically.</p>
