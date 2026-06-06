@@ -183,14 +183,15 @@ async function startServer() {
   app.get("/api/storage/list", async (req, res) => {
     try {
       const files = await fs.readdir(STORAGE_DIR);
-      const items = [];
-      for (const file of files) {
-        if (file.endsWith('.json')) {
-          const id = file.replace('.json', '');
-          const content = await fs.readFile(path.join(STORAGE_DIR, file), 'utf-8');
-          items.push({ id, data: JSON.parse(content) });
-        }
-      }
+      const items = await Promise.all(
+        files
+          .filter((file) => file.endsWith('.json'))
+          .map(async (file) => {
+            const id = file.replace('.json', '');
+            const content = await fs.readFile(path.join(STORAGE_DIR, file), 'utf-8');
+            return { id, data: JSON.parse(content) };
+          })
+      );
       res.json(items);
     } catch {
       res.status(500).json({ error: "Failed to list storage" });
