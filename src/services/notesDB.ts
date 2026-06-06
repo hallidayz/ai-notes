@@ -145,6 +145,35 @@ export class NotesDB {
         });
     }
 
+    public async addTasks(tasks: Task[]): Promise<number[]> {
+        const db = await this.getDb();
+        return new Promise((resolve, reject) => {
+            const transaction = db.transaction(this.TASKS_STORE, 'readwrite');
+            const store = transaction.objectStore(this.TASKS_STORE);
+            const ids: number[] = [];
+            let completedCount = 0;
+
+            if (tasks.length === 0) {
+                return resolve([]);
+            }
+
+            tasks.forEach((task, index) => {
+                const request = store.add(task);
+                request.onsuccess = () => {
+                    ids[index] = request.result as number;
+                    completedCount++;
+                    if (completedCount === tasks.length) {
+                        resolve(ids);
+                    }
+                };
+                request.onerror = () => {
+                    transaction.abort();
+                    reject(request.error);
+                };
+            });
+        });
+    }
+
     public async getAllTasks(): Promise<Task[]> {
         const db = await this.getDb();
         return new Promise((resolve, reject) => {
