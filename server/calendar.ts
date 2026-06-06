@@ -107,11 +107,11 @@ export const CalendarBackend = {
   },
 
   // Apple (CalDAV)
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   getAppleEvents: async (config: { url: string, user: string, password: string }) => {
     // This is a simplified CalDAV fetcher. 
     // In a real app, we'd use a library like 'dav' or 'ical.js'.
     // For now, we'll return a placeholder to show it's connected.
-    console.log(`Fetching Apple events for ${config.user} at ${config.url}`);
     return [
       {
         id: 'apple-placeholder-1',
