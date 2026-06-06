@@ -14,9 +14,14 @@ export const SessionsList: React.FC<SessionsListProps> = ({ sessions, onSelect, 
         return <div className="empty-state">No sessions yet. Create one to get started!</div>;
     }
 
-    const decryptAndPreview = () => {
+    const decryptAndPreview = (session: Session) => {
         try {
-            return `Encrypted notes...`;
+            if (!session.notes) return "No preview available";
+            if (!session.notes.includes(' ')) {
+                atob(session.notes);
+                return `Encrypted notes...`;
+            }
+            return session.notes.substring(0, 100) + (session.notes.length > 100 ? '...' : '');
         } catch {
             return "Could not decrypt preview.";
         }
@@ -33,7 +38,7 @@ export const SessionsList: React.FC<SessionsListProps> = ({ sessions, onSelect, 
                             <span className="session-date">{new Date(session.date).toLocaleDateString()}</span>
                         </div>
                         {session.participants && <p className="session-participants">With: {session.participants}</p>}
-                        <p className="session-preview">{decryptAndPreview()}</p>
+                        <p className="session-preview">{decryptAndPreview(session)}</p>
                         {session.analysisStatus && session.analysisStatus !== 'complete' && session.analysisStatus !== 'none' && (
                             <div className={`session-status-indicator ${session.analysisStatus}`}>
                                 {session.analysisStatus === 'pending' && <><div className="spinner-small"></div> Processing AI analysis...</>}
