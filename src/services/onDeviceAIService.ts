@@ -5,8 +5,7 @@ import { TranscriptChunk, ModelConfig } from '../types';
 
 export class OnDeviceAIService {
     private static instance: OnDeviceAIService | null = null;
-    private transcriptionPipe: unknown = null;
-    private analysisPipe: unknown = null;
+    private pipelineCache: { [modelPath: string]: unknown } = {};
     private currentConfig: ModelConfig = {
         transcriptionModelId: 'whisper-tiny-en',
         analysisModelId: 'flan-t5-small'
@@ -37,40 +36,43 @@ export class OnDeviceAIService {
 
     public updateConfig(config: ModelConfig) {
         if (config.transcriptionModelId !== this.currentConfig.transcriptionModelId) {
-            this.transcriptionPipe = null;
+            const oldModelPath = this.modelMap[this.currentConfig.transcriptionModelId];
+            if (oldModelPath) delete this.pipelineCache[oldModelPath];
         }
         if (config.analysisModelId !== this.currentConfig.analysisModelId) {
-            this.analysisPipe = null;
+            const oldModelPath = this.modelMap[this.currentConfig.analysisModelId];
+            if (oldModelPath) delete this.pipelineCache[oldModelPath];
         }
         this.currentConfig = config;
     }
 
-    public async preloadModel(modelPath: string, progress_callback?: (progress: { status: string; progress?: number }) => void) {
-        // We just initialize a pipeline to trigger download
-        // We don't need to store it yet if it's just preloading
-        await pipeline('feature-extraction', modelPath, { progress_callback });
+    public async preloadModel(modelPath: string, type: 'transcription' | 'analysis', progress_callback?: (progress: { status: string; progress?: number }) => void) {
+        const task = type === 'transcription' ? 'automatic-speech-recognition' : 'text2text-generation';
+        if (!this.pipelineCache[modelPath]) {
+            this.pipelineCache[modelPath] = await pipeline(task, modelPath, { progress_callback });
+        }
     }
 
     private async getTranscriptionPipeline(progress_callback?: (progress: { status: string; progress?: number }) => void) {
         const modelPath = this.modelMap[this.currentConfig.transcriptionModelId] || 'Xenova/whisper-tiny.en';
-        if (!this.transcriptionPipe) {
-            this.transcriptionPipe = await pipeline('automatic-speech-recognition', modelPath, {
+        if (!this.pipelineCache[modelPath]) {
+            this.pipelineCache[modelPath] = await pipeline('automatic-speech-recognition', modelPath, {
                 progress_callback,
             });
         }
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        return this.transcriptionPipe as any;
+        return this.pipelineCache[modelPath] as any;
     }
 
     private async getAnalysisPipeline(progress_callback?: (progress: { status: string; progress?: number }) => void) {
         const modelPath = this.modelMap[this.currentConfig.analysisModelId] || 'Xenova/flan-t5-small';
-        if (!this.analysisPipe) {
-            this.analysisPipe = await pipeline('text2text-generation', modelPath, {
+        if (!this.pipelineCache[modelPath]) {
+            this.pipelineCache[modelPath] = await pipeline('text2text-generation', modelPath, {
                 progress_callback,
             });
         }
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        return this.analysisPipe as any;
+        return this.pipelineCache[modelPath] as any;
     }
 
     public async analyze(

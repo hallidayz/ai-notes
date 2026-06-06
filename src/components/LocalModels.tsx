@@ -114,7 +114,7 @@ export const LocalModels: React.FC<LocalModelsProps> = ({ storageProvider, onBac
         setDownloadProgress(0);
         
         try {
-            await onDeviceAIService.preloadModel(model.huggingFacePath, (p) => {
+            await onDeviceAIService.preloadModel(model.huggingFacePath, model.type, (p) => {
                 if (p.status === 'progress') {
                     setDownloadProgress(p.progress || 0);
                 }
