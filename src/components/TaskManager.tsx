@@ -6,6 +6,7 @@ import { TaskItem } from './TaskItem';
 interface TaskManagerProps {
     tasks: Task[];
     onAddTask: (task: Omit<Task, 'id' | 'timestamp'>) => Promise<boolean>;
+    onAddTasks?: (tasks: Omit<Task, 'id' | 'timestamp'>[]) => Promise<boolean>;
     onUpdateTask: (task: Task) => void;
     onDeleteTask: (id: number) => void;
     sessions: Session[];
@@ -17,6 +18,7 @@ interface TaskManagerProps {
 export const TaskManager: React.FC<TaskManagerProps> = ({ 
     tasks, 
     onAddTask, 
+    onAddTasks,
     onUpdateTask, 
     onDeleteTask, 
     sessions,
@@ -100,16 +102,25 @@ export const TaskManager: React.FC<TaskManagerProps> = ({
 
             // Create tasks from action items
             let addedCount = 0;
-            for (const item of results.action_items) {
-                const success = await onAddTask({
-                    title: item,
-                    priority: 'medium',
-                    dueDate: null,
-                    status: 'todo',
-                    sessionId: session.id,
-                    sessionName: session.sessionTitle
-                });
-                if (success) addedCount++;
+            const tasksToAdd = results.action_items.map((item: string) => ({
+                title: item,
+                priority: 'medium' as const,
+                dueDate: null,
+                status: 'todo' as const,
+                sessionId: session.id,
+                sessionName: session.sessionTitle
+            }));
+
+            if (tasksToAdd.length > 0) {
+                if (onAddTasks) {
+                    const success = await onAddTasks(tasksToAdd);
+                    if (success) addedCount = tasksToAdd.length;
+                } else {
+                    for (const task of tasksToAdd) {
+                        const success = await onAddTask(task);
+                        if (success) addedCount++;
+                    }
+                }
             }
 
             setSuccessMessage(`Successfully generated ${addedCount} tasks from session "${session.sessionTitle}"!`);

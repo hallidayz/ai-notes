@@ -75,6 +75,7 @@ export interface StorageProvider {
     saveAudioBlob(sessionId: number, blob: Blob): Promise<void>;
     getAudioBlob(sessionId: number): Promise<Blob | undefined>;
     saveTask(task: Task): Promise<number>;
+    saveTasks(tasks: Task[]): Promise<number[]>;
     getAllTasks(): Promise<Task[]>;
     updateTask(task: Task): Promise<void>;
     deleteTask(id: number): Promise<void>;

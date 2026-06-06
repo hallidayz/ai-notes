@@ -190,6 +190,24 @@ const MainApp: React.FC<{ pin: string, isDarkMode: boolean, onToggleTheme: () =>
         }
     };
 
+    const handleAddTasks = async (tasksData: Omit<Task, 'id' | 'timestamp'>[]) => {
+        try {
+            const now = Date.now();
+            const newTasks: Task[] = tasksData.map(taskData => ({
+                ...taskData,
+                timestamp: now
+            }));
+            await storageProvider.saveTasks(newTasks);
+            await loadData();
+            showStatus(`${newTasks.length} tasks added.`, 'success');
+            return true;
+        } catch (err) {
+            console.error("Error adding tasks:", err);
+            showStatus('Failed to add tasks.', 'error');
+            return false;
+        }
+    };
+
     const handleUpdateTask = async (task: Task) => {
         try {
             await storageProvider.updateTask(task);
@@ -238,6 +256,7 @@ const MainApp: React.FC<{ pin: string, isDarkMode: boolean, onToggleTheme: () =>
                     <TaskManager 
                         tasks={tasks}
                         onAddTask={handleAddTask}
+                        onAddTasks={handleAddTasks}
                         onUpdateTask={handleUpdateTask}
                         onDeleteTask={handleDeleteTask}
                         sessions={sessions}
