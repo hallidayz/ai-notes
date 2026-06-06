@@ -1,49 +1,170 @@
 import test from 'node:test';
 import assert from 'node:assert';
-import { OnDeviceAIService } from './onDeviceAIService'; // drop .ts extension for node:test tsx
+import { OnDeviceAIService } from './onDeviceAIService.ts';
 
-test('analyze handles empty string', async (t) => {
-    // Mock the private getTranscriptionPipeline method
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    t.mock.method(OnDeviceAIService.prototype as any, 'getTranscriptionPipeline', async () => {
-        return async () => ({
-            chunks: [{ text: '   ' }] // Spaces that will be empty when trimmed
-        });
-    });
+test('OnDeviceAIService analyze should fallback to on-device models when GEMINI_API_KEY is not present', async (t) => {
+    const originalEnv = process.env.GEMINI_API_KEY;
+    delete process.env.GEMINI_API_KEY;
 
     const originalWindow = global.window;
+    const originalBlob = global.Blob;
 
-    t.after(() => {
-        global.window = originalWindow;
-    });
-
-    // Mock window.AudioContext required by OnDeviceAIService.analyze
     global.window = {
         AudioContext: class {
             decodeAudioData() {
                 return {
-                    getChannelData() { return new Float32Array(); }
+                    getChannelData: () => new Float32Array(0)
                 };
             }
         }
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     } as any;
 
+    global.Blob = class {
+        arrayBuffer() {
+            return new ArrayBuffer(0);
+        }
+    } as any;
+
+    const mockedPipeline = async (task: string) => {
+        if (task === 'automatic-speech-recognition') {
+            return async () => {
+                return {
+                    chunks: [
+                        { text: ' Hello' },
+                        { text: ' World' }
+                    ]
+                };
+            };
+        } else if (task === 'text2text-generation') {
+            return async (prompt: string) => {
+                if (prompt.includes('Summarize')) {
+                    return [{ generated_text: 'Dummy Summary' }];
+                }
+                if (prompt.includes('Extract action items')) {
+                    return [{ generated_text: 'Dummy Action 1. Dummy Action 2.' }];
+                }
+                if (prompt.includes('outline')) {
+                    return [{ generated_text: 'Dummy Outline' }];
+                }
+                return [{ generated_text: 'Unknown' }];
+            };
+        }
+        return async () => {};
+    };
+
+    (OnDeviceAIService as any).instance = null;
     const service = OnDeviceAIService.getInstance();
 
-    // Mock Blob with an empty ArrayBuffer
-    const blob = {
-        arrayBuffer: async () => new ArrayBuffer(0)
-    } as Blob;
+    t.mock.method(service, 'getTranscriptionPipeline', async () => await mockedPipeline('automatic-speech-recognition'));
+    t.mock.method(service, 'getAnalysisPipeline', async () => await mockedPipeline('text2text-generation'));
 
-    // Call the analyze function with mock inputs
-    const result = await service.analyze(blob, 'tech', () => {});
-
-    // Assert that the result matches the expected empty object
-    assert.deepStrictEqual(result, {
-        transcript: [],
-        summary: '',
-        action_items: [],
-        outline: ''
+    const progressLogs: string[] = [];
+    const result = await service.analyze(new global.Blob(), 'Tech', (status: string) => {
+        progressLogs.push(status);
     });
+
+    assert.strictEqual(result.summary, 'Dummy Summary');
+    assert.strictEqual(result.outline, 'Dummy Outline');
+    assert.deepStrictEqual(result.action_items, ['Dummy Action 1', 'Dummy Action 2.']);
+    assert.deepStrictEqual(result.transcript, [
+        { speaker: 'Speaker 1', text: ' Hello' },
+        { speaker: 'Speaker 1', text: ' World' }
+    ]);
+
+    // Restore global state
+    if (originalEnv !== undefined) {
+        process.env.GEMINI_API_KEY = originalEnv;
+    }
+    global.window = originalWindow;
+    global.Blob = originalBlob;
+});
+
+test('OnDeviceAIService analyze should fallback to on-device models when Gemini API fails', async (t) => {
+    const originalEnv = process.env.GEMINI_API_KEY;
+    process.env.GEMINI_API_KEY = 'mock_key';
+
+    const originalWindow = global.window;
+    const originalBlob = global.Blob;
+    const originalFetch = global.fetch;
+
+    global.window = {
+        AudioContext: class {
+            decodeAudioData() {
+                return {
+                    getChannelData: () => new Float32Array(0)
+                };
+            }
+        }
+    } as any;
+
+    global.Blob = class {
+        arrayBuffer() {
+            return new ArrayBuffer(0);
+        }
+    } as any;
+
+    // Mock fetch to simulate Gemini API failure
+    global.fetch = async () => {
+        throw new Error('Network Error');
+    };
+
+    const mockedPipeline = async (task: string) => {
+        if (task === 'automatic-speech-recognition') {
+            return async () => {
+                return {
+                    chunks: [
+                        { text: ' Hello' },
+                        { text: ' World' }
+                    ]
+                };
+            };
+        } else if (task === 'text2text-generation') {
+            return async (prompt: string) => {
+                if (prompt.includes('Summarize')) {
+                    return [{ generated_text: 'Dummy Summary Fallback' }];
+                }
+                if (prompt.includes('Extract action items')) {
+                    return [{ generated_text: 'Fallback Action 1. Fallback Action 2.' }];
+                }
+                if (prompt.includes('outline')) {
+                    return [{ generated_text: 'Dummy Outline Fallback' }];
+                }
+                return [{ generated_text: 'Unknown' }];
+            };
+        }
+        return async () => {};
+    };
+
+    const originalConsoleError = console.error;
+    console.error = () => {};
+
+    (OnDeviceAIService as any).instance = null;
+    const service = OnDeviceAIService.getInstance();
+
+    t.mock.method(service, 'getTranscriptionPipeline', async () => await mockedPipeline('automatic-speech-recognition'));
+    t.mock.method(service, 'getAnalysisPipeline', async () => await mockedPipeline('text2text-generation'));
+
+    const progressLogs: string[] = [];
+    const result = await service.analyze(new global.Blob(), 'Tech', (status: string) => {
+        progressLogs.push(status);
+    });
+
+    assert.strictEqual(result.summary, 'Dummy Summary Fallback');
+    assert.strictEqual(result.outline, 'Dummy Outline Fallback');
+    assert.deepStrictEqual(result.action_items, ['Fallback Action 1', 'Fallback Action 2.']);
+    assert.deepStrictEqual(result.transcript, [
+        { speaker: 'Speaker 1', text: ' Hello' },
+        { speaker: 'Speaker 1', text: ' World' }
+    ]);
+
+    // Restore global state
+    if (originalEnv !== undefined) {
+        process.env.GEMINI_API_KEY = originalEnv;
+    } else {
+        delete process.env.GEMINI_API_KEY;
+    }
+    console.error = originalConsoleError;
+    global.window = originalWindow;
+    global.Blob = originalBlob;
+    global.fetch = originalFetch;
 });
