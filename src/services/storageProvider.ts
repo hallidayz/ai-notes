@@ -40,18 +40,21 @@ export class ServerStorageProvider implements StorageProvider {
         const { CryptoService } = await import('./cryptoService');
         const res = await fetch('/api/storage/list');
         const items = await res.json();
-        const sessions: Session[] = [];
-        for (const item of items) {
-            if (item.id !== 'tasks_list' && item.id !== 'calendar_connections' && item.data.encrypted) {
+
+        const sessionPromises = items
+            .filter((item: { id: string, data?: { encrypted?: string } }) => item.id !== 'tasks_list' && item.id !== 'calendar_connections' && item.data?.encrypted)
+            .map(async (item: { id: string, data: { encrypted: string } }) => {
                 try {
                     const decrypted = await CryptoService.decrypt(item.data.encrypted, this.pin);
-                    sessions.push(JSON.parse(decrypted));
+                    return JSON.parse(decrypted);
                 } catch (e) {
                     console.error("Failed to decrypt session", item.id, e);
+                    return null;
                 }
-            }
-        }
-        return sessions;
+            });
+
+        const resolvedSessions = await Promise.all(sessionPromises);
+        return resolvedSessions.filter((session: Session | null): session is Session => session !== null);
     }
     async getSession(id: number) {
         const { CryptoService } = await import('./cryptoService');
