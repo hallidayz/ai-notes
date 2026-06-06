@@ -2,7 +2,7 @@ export class GhostTextService {
     private static instance: GhostTextService;
     private worker: Worker | null = null;
     private initializationPromise: Promise<void> | null = null;
-    private pendingRequests: Map<string, { resolve: (val: string) => void, reject: (err: any) => void }> = new Map();
+    private pendingRequests: Map<string, { resolve: (val: string) => void, reject: (err: unknown) => void }> = new Map();
     private messageCounter = 0;
     // Add testing toggle
     private isTestEnvironment = false;
@@ -15,7 +15,7 @@ export class GhostTextService {
                 });
 
                 this.worker.onmessage = this.handleWorkerMessage.bind(this);
-            } catch (e) {
+            } catch {
                 // If it fails (e.g. in node tests), mark as test env
                 this.isTestEnvironment = true;
             }

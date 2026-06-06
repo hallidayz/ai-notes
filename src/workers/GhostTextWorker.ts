@@ -3,7 +3,7 @@ import { pipeline, env } from '@huggingface/transformers';
 // Configure transformers environment for the browser worker
 env.allowLocalModels = false;
 
-let generator: any = null;
+let generator: Awaited<ReturnType<typeof pipeline>> | null = null;
 let isInitializing = false;
 
 async function initialize() {

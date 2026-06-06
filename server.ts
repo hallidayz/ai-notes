@@ -205,8 +205,8 @@ async function startServer() {
       }
       const content = await fs.readFile(path.join(STORAGE_DIR, `${id}.json`), 'utf-8');
       res.json({ id, data: JSON.parse(content) });
-    } catch (err: any) {
-      if (err.code === 'ENOENT') {
+    } catch (err: unknown) {
+      if (err instanceof Error && 'code' in err && (err as NodeJS.ErrnoException).code === 'ENOENT') {
         res.status(404).json({ error: "Not found" });
       } else {
         res.status(500).json({ error: "Failed to read storage item" });

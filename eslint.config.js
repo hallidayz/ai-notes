@@ -25,4 +25,22 @@ export default tseslint.config(
       ],
     },
   },
+  {
+    files: ['**/*.test.ts', '**/*.test.tsx', '**/tests/**/*.ts', 'benchmark.ts'],
+    rules: {
+      '@typescript-eslint/no-explicit-any': 'off',
+      '@typescript-eslint/no-unsafe-function-type': 'off',
+      '@typescript-eslint/no-unused-vars': ['error', {
+        argsIgnorePattern: '^_',
+        varsIgnorePattern: '^_',
+        caughtErrorsIgnorePattern: '^_',
+      }],
+    },
+  },
+  {
+    files: ['server.ts', 'server/**/*.ts', 'benchmark.ts'],
+    languageOptions: {
+      globals: globals.node,
+    },
+  },
 );

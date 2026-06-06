@@ -6,8 +6,9 @@ import { onDeviceAIService } from '../services/onDeviceAIService';
 
 interface LocalModelsProps {
     storageProvider: StorageProvider;
-    onBack: () => void;
+    onBack?: () => void;
     showStatus: (msg: string, type: 'success' | 'error' | 'info') => void;
+    embedded?: boolean;
 }
 
 const AVAILABLE_MODELS: LocalModel[] = [
@@ -71,7 +72,7 @@ const AVAILABLE_MODELS: LocalModel[] = [
     }
 ];
 
-export const LocalModels: React.FC<LocalModelsProps> = ({ storageProvider, onBack, showStatus }) => {
+export const LocalModels: React.FC<LocalModelsProps> = ({ storageProvider, onBack, showStatus, embedded = false }) => {
     const [config, setConfig] = useState<ModelConfig>({
         transcriptionModelId: 'whisper-tiny-en',
         analysisModelId: 'flan-t5-small'
@@ -156,78 +157,81 @@ export const LocalModels: React.FC<LocalModelsProps> = ({ storageProvider, onBac
         return (
             <div 
                 key={model.id}
-                className={`flex items-center p-4 border-b border-black/5 hover:bg-black/5 transition-colors cursor-pointer ${isSelected ? 'bg-black/5' : ''}`}
+                className={`local-model-card ${isSelected ? 'selected' : ''}`}
                 onClick={() => handleSelect(model)}
             >
-                <div className="w-10 h-10 rounded-lg bg-white border border-black/10 flex items-center justify-center mr-4">
+                <div className="local-model-radio">
                     {isSelected ? (
-                        <div className="w-6 h-6 rounded-full bg-black flex items-center justify-center">
-                            <Check className="text-white w-4 h-4" />
+                        <div className="local-model-radio-selected">
+                            <Check className="w-4 h-4" />
                         </div>
                     ) : (
-                        <div className="w-6 h-6 rounded-full border-2 border-black/20" />
+                        <div className="local-model-radio-empty" />
                     )}
                 </div>
                 
-                <div className="flex-1">
-                    <div className="flex items-center">
-                        <h3 className="font-medium text-sm">{model.name}</h3>
+                <div className="local-model-info">
+                    <div className="local-model-name">
+                        <h4>{model.name}</h4>
                         {isDownloaded && !isSelected && (
-                            <Check className="w-3 h-3 text-green-500 ml-2" />
+                            <Check className="local-model-check" />
                         )}
                     </div>
-                    <p className="text-xs text-gray-500">
+                    <p className="local-model-meta">
                         {model.parameters} parameters • {model.provider}
                     </p>
                     {isDownloaded && (
-                        <div className="flex items-center mt-1">
-                            <Check className="w-3 h-3 text-green-500 mr-1" />
-                            <span className="text-[10px] text-green-600 font-medium">Downloaded</span>
+                        <div className="local-model-downloaded">
+                            <Check className="local-model-check" />
+                            <span>Downloaded</span>
                         </div>
                     )}
                 </div>
 
-                <div className="flex items-center">
+                <div className="local-model-action">
                     {isDownloading ? (
-                        <div className="flex flex-col items-end">
-                            <Loader2 className="w-5 h-5 animate-spin text-black mb-1" />
-                            <span className="text-[10px] font-mono">{Math.round(downloadProgress)}%</span>
+                        <div className="local-model-progress">
+                            <Loader2 className="local-model-spinner" />
+                            <span>{Math.round(downloadProgress)}%</span>
                         </div>
                     ) : !isDownloaded ? (
-                        <Download className="w-5 h-5 text-gray-400" />
+                        <Download className="local-model-download-icon" />
                     ) : null}
                 </div>
             </div>
         );
     };
 
+    const content = (
+        <>
+            <div className="local-models-info">
+                <Info className="local-models-info-icon" />
+                <p>
+                    These models run entirely on your device. Downloading them may take a few moments depending on your connection. Once downloaded, they work fully offline.
+                </p>
+            </div>
+
+            <div className="local-models-group-label">Transcription Models</div>
+            {AVAILABLE_MODELS.filter(m => m.type === 'transcription').map(renderModelCard)}
+
+            <div className="local-models-group-label">Analysis Models</div>
+            {AVAILABLE_MODELS.filter(m => m.type === 'analysis').map(renderModelCard)}
+        </>
+    );
+
+    if (embedded) {
+        return <div className="local-models-embedded">{content}</div>;
+    }
+
     return (
-        <div className="flex flex-col h-full bg-white">
-            <div className="p-4 border-b border-black/10 flex items-center sticky top-0 bg-white z-10">
-                <button onClick={onBack} className="mr-4 p-1 hover:bg-black/5 rounded-full transition-colors">
+        <div className="local-models-page">
+            <div className="local-models-header">
+                <button onClick={onBack} className="local-models-back" aria-label="Go back">
                     <ChevronLeft className="w-6 h-6" />
                 </button>
-                <h2 className="text-xl font-bold">Local models</h2>
+                <h2>Local models</h2>
             </div>
-
-            <div className="flex-1 overflow-y-auto">
-                <div className="p-4 bg-blue-50 border-b border-blue-100 flex items-start">
-                    <Info className="w-5 h-5 text-blue-500 mr-3 mt-0.5 flex-shrink-0" />
-                    <p className="text-xs text-blue-700 leading-relaxed">
-                        These models run entirely on your device. Downloading them may take a few moments depending on your connection. Once downloaded, they work fully offline.
-                    </p>
-                </div>
-
-                <div className="px-4 py-2 bg-gray-50 text-[10px] font-bold text-gray-400 uppercase tracking-wider">
-                    Transcription Models
-                </div>
-                {AVAILABLE_MODELS.filter(m => m.type === 'transcription').map(renderModelCard)}
-
-                <div className="px-4 py-2 bg-gray-50 text-[10px] font-bold text-gray-400 uppercase tracking-wider mt-4">
-                    Analysis Models
-                </div>
-                {AVAILABLE_MODELS.filter(m => m.type === 'analysis').map(renderModelCard)}
-            </div>
+            <div className="local-models-body">{content}</div>
         </div>
     );
 };

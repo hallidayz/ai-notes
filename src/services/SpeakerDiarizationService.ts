@@ -32,7 +32,7 @@ export class SpeakerDiarizationService {
     private speakerProfiles: Map<string, SpeakerProfile> = new Map();
     private readonly DB_NAME = 'speakerProfilesDB';
     private readonly STORE_NAME = 'speakers';
-    private speakerModel: any = null; // Will hold the speaker verification model
+    private speakerModel: unknown = null;
 
     private constructor() {}
 
@@ -229,7 +229,7 @@ export class SpeakerDiarizationService {
                     const profiles = getAllRequest.result;
                     profiles.forEach((profile: SpeakerProfile) => {
                         // Convert embeddings back to Float32Array
-                        profile.embeddings = profile.embeddings.map((emb: any) =>
+                        profile.embeddings = profile.embeddings.map((emb: number[] | Float32Array) =>
                             new Float32Array(emb)
                         );
                         this.speakerProfiles.set(profile.id, profile);

@@ -16,7 +16,7 @@ describe('CalendarBackend.exchangeGoogleCode', () => {
     const { OAuth2Client } = await import('google-auth-library');
 
     // Mock the getToken method on the prototype
-    const mockGetToken = mock.method(OAuth2Client.prototype, 'getToken', async (opts) => {
+    const mockGetToken = mock.method(OAuth2Client.prototype, 'getToken', async (_opts) => {
       return { tokens: { access_token: 'fake-token', refresh_token: 'fake-refresh' } };
     });
 

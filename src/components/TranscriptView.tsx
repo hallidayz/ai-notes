@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useMemo } from 'react';
 import { TranscriptChunk } from '../types';
 
 interface TranscriptViewProps {
@@ -7,29 +7,32 @@ interface TranscriptViewProps {
 }
 
 export const TranscriptView: React.FC<TranscriptViewProps> = ({ transcript, onUpdateTranscript }) => {
-    const [speakerMap, setSpeakerMap] = useState<{[key: string]: string}>({});
+    const [speakerOverrides, setSpeakerOverrides] = useState<Record<string, string>>({});
     const [editingSpeaker, setEditingSpeaker] = useState<{chunkIndex: number, oldName: string} | null>(null);
 
-    useEffect(() => {
-        const uniqueSpeakers: string[] = [];
+    const uniqueSpeakers = useMemo(() => {
+        const speakers: string[] = [];
         transcript.forEach((c) => {
-            if (!uniqueSpeakers.includes(c.speaker)) {
-                uniqueSpeakers.push(c.speaker);
+            if (!speakers.includes(c.speaker)) {
+                speakers.push(c.speaker);
             }
         });
-        const initialMap: {[key: string]: string} = {};
-        uniqueSpeakers.forEach(speaker => {
-            initialMap[speaker] = speaker;
-        });
-        setSpeakerMap(initialMap);
+        return speakers;
     }, [transcript]);
+
+    const speakerMap = useMemo(() => {
+        const map: Record<string, string> = {};
+        uniqueSpeakers.forEach(speaker => {
+            map[speaker] = speakerOverrides[speaker] ?? speaker;
+        });
+        return map;
+    }, [uniqueSpeakers, speakerOverrides]);
 
     const handleSpeakerNameChange = (newName: string) => {
         if (!editingSpeaker) return;
 
         const { oldName } = editingSpeaker;
-        const newMap = { ...speakerMap, [oldName]: newName };
-        setSpeakerMap(newMap);
+        setSpeakerOverrides(prev => ({ ...prev, [oldName]: newName }));
 
         const newTranscript = transcript.map(chunk => {
             if (chunk.speaker === oldName) {

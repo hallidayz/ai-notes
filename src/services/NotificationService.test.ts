@@ -195,16 +195,13 @@ test('NotificationService.showNotification', async (t) => {
         const originalNotification = (global as any).Notification;
 
         let notificationOptions = null;
-        let closed = false;
 
         class MockNotification {
             static permission = 'granted';
-            constructor(title: string, options: any) {
+            constructor(title: string, options: Record<string, unknown>) {
                 notificationOptions = { title, ...options };
             }
-            close() {
-                closed = true;
-            }
+            close() {}
         }
 
         (global as any).window = { Notification: MockNotification };
@@ -250,7 +247,7 @@ test('NotificationService.showNotification', async (t) => {
 
         class MockNotification {
             static permission = 'granted';
-            constructor(title: string, options: any) {
+            constructor(_title: string, _options: Record<string, unknown>) {
             }
             close() {
                 closed = true;

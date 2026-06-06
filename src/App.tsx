@@ -11,7 +11,7 @@ import { SessionsList } from './components/SessionsList';
 import { SessionDetailModal } from './components/SessionDetailModal';
 import { TaskManager } from './components/TaskManager';
 import { CalendarIntegration } from './components/CalendarIntegration';
-import { LocalModels } from './components/LocalModels';
+import { Settings } from './components/Settings';
 import { onDeviceAIService } from './services/onDeviceAIService';
 
 const db = new NotesDB();
@@ -48,7 +48,8 @@ const MainApp: React.FC<{ pin: string, isDarkMode: boolean, onToggleTheme: () =>
     const [tasks, setTasks] = useState<Task[]>([]);
     const [selectedSession, setSelectedSession] = useState<Session | null>(null);
     const [isLoading, setIsLoading] = useState(true);
-    const [view, setView] = useState<'sessions' | 'tasks' | 'calendar' | 'local_models'>('sessions');
+    const [view, setView] = useState<'sessions' | 'tasks' | 'calendar'>('sessions');
+    const [isSettingsOpen, setIsSettingsOpen] = useState(false);
     const [industry, setIndustry] = useState('General');
     const [storageType, setStorageType] = useState<StorageType>(StorageType.BROWSER);
     const [storageProvider, setStorageProvider] = useState<StorageProvider>(new IndexedDBProvider(db));
@@ -265,48 +266,30 @@ const MainApp: React.FC<{ pin: string, isDarkMode: boolean, onToggleTheme: () =>
                 );
             case 'calendar':
                 return <CalendarIntegration pin={pin} storageProvider={storageProvider} showStatus={showStatus} />;
-            case 'local_models':
-                return <LocalModels storageProvider={storageProvider} onBack={() => setView('sessions')} showStatus={showStatus} />;
             default:
                 return null;
         }
     };
 
-    if (view === 'local_models') {
-        return <LocalModels storageProvider={storageProvider} onBack={() => setView('sessions')} showStatus={showStatus} />;
-    }
-
     return (
         <div className="container">
             <header>
-                <div style={{ position: 'absolute', top: '20px', right: '20px', display: 'flex', gap: '10px' }}>
-                    <button 
-                        onClick={() => setView('local_models')}
-                        className="btn-secondary"
-                        style={{ padding: '8px', borderRadius: '50%', width: '40px', height: '40px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
-                        title="Local Models"
+                <div className="header-actions">
+                    <button
+                        onClick={() => setIsSettingsOpen(true)}
+                        className="btn-secondary header-icon-btn"
+                        title="Settings"
+                        aria-label="Settings"
                     >
-                        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2v8"/><path d="m16 6-4 4-4-4"/><rect width="20" height="8" x="2" y="14" rx="2"/><path d="M6 18h.01"/><path d="M10 18h.01"/></svg>
+                        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/>
+                            <circle cx="12" cy="12" r="3"/>
+                        </svg>
                     </button>
                     <ThemeToggle isDarkMode={isDarkMode} onToggle={onToggleTheme} />
                 </div>
                 <h1>AI Notes</h1>
                 <p>Private, Secure, On-Device Intelligence</p>
-                <div className="settings-container">
-                    <label htmlFor="industrySelector">Industry Context:</label>
-                    <select 
-                        id="industrySelector" 
-                        value={industry} 
-                        onChange={(e) => handleIndustryChange(e.target.value)}
-                    >
-                        <option value="General">General</option>
-                        <option value="Medical">Medical</option>
-                        <option value="Legal">Legal</option>
-                        <option value="Therapy">Therapy</option>
-                        <option value="Business">Business/Meetings</option>
-                        <option value="Education">Education</option>
-                    </select>
-                </div>
                 
                 <div className="storage-settings">
                     <p style={{fontSize: '0.8em', fontWeight: 600, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.05em'}}>Storage Location</p>
@@ -361,6 +344,15 @@ const MainApp: React.FC<{ pin: string, isDarkMode: boolean, onToggleTheme: () =>
                     showStatus={showStatus}
                 />
             )}
+
+            <Settings
+                isOpen={isSettingsOpen}
+                onClose={() => setIsSettingsOpen(false)}
+                industry={industry}
+                onIndustryChange={handleIndustryChange}
+                storageProvider={storageProvider}
+                showStatus={showStatus}
+            />
 
             {confirmDeleteSessionId !== null && (
                 <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[100] p-4">

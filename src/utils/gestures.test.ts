@@ -1,4 +1,4 @@
-import test, { describe, it, beforeEach, afterEach } from 'node:test';
+import { describe, it, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert';
 import { useSwipe, triggerHaptic } from './gestures.ts';
 import { renderHook } from '@testing-library/react';

@@ -5,7 +5,7 @@ import assert from 'node:assert';
 // Transformers.js needs a bunch of globals mocked if tested in node without specific setup,
 // so for this test we'll mostly ensure the singleton logic and empty behaviors work.
 
-test('GhostTextService Singleton', async (t) => {
+test('GhostTextService Singleton', async () => {
     const { GhostTextService } = await import('./GhostTextService.ts');
 
     const instance1 = GhostTextService.getInstance();
@@ -14,7 +14,7 @@ test('GhostTextService Singleton', async (t) => {
     assert.strictEqual(instance1, instance2, 'Instances should be strictly equal');
 });
 
-test('GhostTextService returns empty for empty input', async (t) => {
+test('GhostTextService returns empty for empty input', async () => {
     const { GhostTextService } = await import('./GhostTextService.ts');
 
     const instance = GhostTextService.getInstance();

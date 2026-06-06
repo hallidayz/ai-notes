@@ -1,6 +1,6 @@
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
-const mockOnAddTask = async (task: any) => {
+const mockOnAddTask = async (_task: { title: string }) => {
     await delay(50); // mock 50ms delay for each task addition
     return true;
 };
