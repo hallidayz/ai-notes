@@ -27,8 +27,7 @@ export const NewSessionForm: React.FC<NewSessionFormProps> = ({ onAddSession, sh
             if (recordingType === 'mic') {
                 stream = await navigator.mediaDevices.getUserMedia({ audio: true });
             } else {
-                // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                stream = await (navigator.mediaDevices as any).getDisplayMedia({
+                stream = await navigator.mediaDevices.getDisplayMedia({
                     video: true,
                     audio: true
                 });
