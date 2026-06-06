@@ -74,8 +74,6 @@ const MainApp: React.FC<{ pin: string, isDarkMode: boolean, onToggleTheme: () =>
                 if (modelConfig) {
                     onDeviceAIService.updateConfig(modelConfig);
                 }
-
-                // Initial load will happen in the storageProvider effect
             } catch (err) {
                 console.error("Error loading initial config:", err);
             } finally {
