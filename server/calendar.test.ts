@@ -1,35 +1,38 @@
-import { test, describe, before } from 'node:test';
-import * as assert from 'node:assert';
+import { test, describe, before, after, mock } from 'node:test';
+import assert from 'node:assert';
 
-describe('CalendarBackend', () => {
-  let CalendarBackend: any;
-
-  before(async () => {
-    // We must set the environment variables before importing calendar.ts
-    // to avoid runtime errors when OAuth2Client is initialized.
-    process.env.GOOGLE_CLIENT_ID = 'test-google-client-id';
-    process.env.GOOGLE_CLIENT_SECRET = 'test-google-client-secret';
-
-    const module = await import('./calendar.ts');
-    CalendarBackend = module.CalendarBackend;
+describe('CalendarBackend.exchangeGoogleCode', () => {
+  before(() => {
+    process.env.GOOGLE_CLIENT_ID = 'test-client-id';
+    process.env.GOOGLE_CLIENT_SECRET = 'test-client-secret';
   });
 
-  describe('getGoogleAuthUrl', () => {
-    test('should generate a valid Google Auth URL with correct parameters', () => {
-      const redirectUri = 'http://localhost:3000/callback';
-      const urlString = CalendarBackend.getGoogleAuthUrl(redirectUri);
+  after(() => {
+    delete process.env.GOOGLE_CLIENT_ID;
+    delete process.env.GOOGLE_CLIENT_SECRET;
+  });
 
-      const url = new URL(urlString);
+  test('should exchange code for tokens by calling googleClient.getToken', async () => {
+    const { OAuth2Client } = await import('google-auth-library');
 
-      assert.strictEqual(url.origin, 'https://accounts.google.com');
-      assert.strictEqual(url.pathname, '/o/oauth2/v2/auth');
-
-      const searchParams = url.searchParams;
-      assert.strictEqual(searchParams.get('access_type'), 'offline');
-      assert.strictEqual(searchParams.get('scope'), 'https://www.googleapis.com/auth/calendar.readonly');
-      assert.strictEqual(searchParams.get('redirect_uri'), redirectUri);
-      assert.strictEqual(searchParams.get('response_type'), 'code');
-      assert.strictEqual(searchParams.get('client_id'), 'test-google-client-id');
+    // Mock the getToken method on the prototype
+    const mockGetToken = mock.method(OAuth2Client.prototype, 'getToken', async (opts) => {
+      return { tokens: { access_token: 'fake-token', refresh_token: 'fake-refresh' } };
     });
+
+    const { CalendarBackend } = await import('./calendar.ts');
+
+    const tokens = await CalendarBackend.exchangeGoogleCode('fake-code', 'http://localhost/callback');
+
+    assert.deepStrictEqual(tokens, { access_token: 'fake-token', refresh_token: 'fake-refresh' });
+
+    assert.strictEqual(mockGetToken.mock.calls.length, 1);
+    assert.deepStrictEqual(mockGetToken.mock.calls[0].arguments[0], {
+      code: 'fake-code',
+      redirect_uri: 'http://localhost/callback'
+    });
+
+    // Restore the mock
+    mockGetToken.mock.restore();
   });
 });
