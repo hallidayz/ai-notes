@@ -170,6 +170,12 @@ async function startServer() {
   });
 
   // API Routes for Server-side storage
+  const isSafeId = (id: unknown) => {
+    if (typeof id !== 'string' || id.trim() === '') return false;
+    if (id.includes('..') || id.includes('/') || id.includes('\\')) return false;
+    return true;
+  };
+
   app.get("/api/storage/list", async (req, res) => {
     try {
       const files = await fs.readdir(STORAGE_DIR);
@@ -187,9 +193,29 @@ async function startServer() {
     }
   });
 
+  app.get("/api/storage/item/:id", async (req, res) => {
+    try {
+      const { id } = req.params;
+      if (!isSafeId(id)) {
+        return res.status(400).json({ error: "Invalid ID" });
+      }
+      const content = await fs.readFile(path.join(STORAGE_DIR, `${id}.json`), 'utf-8');
+      res.json({ id, data: JSON.parse(content) });
+    } catch (err: any) {
+      if (err.code === 'ENOENT') {
+        res.status(404).json({ error: "Not found" });
+      } else {
+        res.status(500).json({ error: "Failed to read storage item" });
+      }
+    }
+  });
+
   app.post("/api/storage/save", async (req, res) => {
     try {
       const { id, data } = req.body;
+      if (!isSafeId(String(id))) {
+        return res.status(400).json({ error: "Invalid ID" });
+      }
       await fs.writeFile(path.join(STORAGE_DIR, `${id}.json`), JSON.stringify(data, null, 2));
       res.json({ success: true });
     } catch {
@@ -199,7 +225,11 @@ async function startServer() {
 
   app.delete("/api/storage/:id", async (req, res) => {
     try {
-      await fs.unlink(path.join(STORAGE_DIR, `${req.params.id}.json`));
+      const { id } = req.params;
+      if (!isSafeId(id)) {
+        return res.status(400).json({ error: "Invalid ID" });
+      }
+      await fs.unlink(path.join(STORAGE_DIR, `${id}.json`));
       res.json({ success: true });
     } catch {
       res.status(500).json({ error: "Failed to delete from storage" });
