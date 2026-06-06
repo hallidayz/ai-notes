@@ -100,7 +100,7 @@ export const SessionDetailModal: React.FC<SessionDetailModalProps> = ({
                     setDecryptedOutline('');
                 }
 
-                // Decrypt todoItems if present
+                // Decrypt action items if present
                 if (session.todoItems) {
                     if (typeof session.todoItems === 'string') {
                         try {
