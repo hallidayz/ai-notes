@@ -6,7 +6,6 @@ import { TaskItem } from './TaskItem';
 interface TaskManagerProps {
     tasks: Task[];
     onAddTask: (task: Omit<Task, 'id' | 'timestamp'>) => Promise<boolean>;
-    onAddTasks?: (tasks: Omit<Task, 'id' | 'timestamp'>[]) => Promise<boolean>;
     onUpdateTask: (task: Task) => void;
     onDeleteTask: (id: number) => void;
     sessions: Session[];
@@ -18,7 +17,6 @@ interface TaskManagerProps {
 export const TaskManager: React.FC<TaskManagerProps> = ({ 
     tasks, 
     onAddTask, 
-    onAddTasks,
     onUpdateTask, 
     onDeleteTask, 
     sessions,
@@ -101,27 +99,18 @@ export const TaskManager: React.FC<TaskManagerProps> = ({
             await onUpdateSession(updatedSession);
 
             // Create tasks from action items
-            let addedCount = 0;
-            const tasksToAdd = results.action_items.map((item: string) => ({
-                title: item,
-                priority: 'medium' as const,
-                dueDate: null,
-                status: 'todo' as const,
-                sessionId: session.id,
-                sessionName: session.sessionTitle
-            }));
-
-            if (tasksToAdd.length > 0) {
-                if (onAddTasks) {
-                    const success = await onAddTasks(tasksToAdd);
-                    if (success) addedCount = tasksToAdd.length;
-                } else {
-                    for (const task of tasksToAdd) {
-                        const success = await onAddTask(task);
-                        if (success) addedCount++;
-                    }
-                }
-            }
+            const addPromises = results.action_items.map((item: string) =>
+                onAddTask({
+                    title: item,
+                    priority: 'medium',
+                    dueDate: null,
+                    status: 'todo',
+                    sessionId: session.id,
+                    sessionName: session.sessionTitle
+                })
+            );
+            const addResults = await Promise.all(addPromises);
+            const addedCount = addResults.filter(success => success).length;
 
             setSuccessMessage(`Successfully generated ${addedCount} tasks from session "${session.sessionTitle}"!`);
             setAnalysisSessionId(undefined);
@@ -234,7 +223,7 @@ export const TaskManager: React.FC<TaskManagerProps> = ({
             </div>
 
             <div className="tasks-list">
-                <h3>Your Tasks ({tasks.reduce((count, t) => t.status !== 'done' ? count + 1 : count, 0)} active)</h3>
+                <h3>Your Tasks ({tasks.filter(t => t.status !== 'done').length} active)</h3>
                 {sortedTasks.length === 0 ? (
                     <div className="empty-state">No tasks yet. Add one above or promote an action item from a session!</div>
                 ) : (
