@@ -10,7 +10,6 @@ import { NewSessionForm } from './components/NewSessionForm';
 import { SessionsList } from './components/SessionsList';
 import { SessionDetailModal } from './components/SessionDetailModal';
 import { TaskManager } from './components/TaskManager';
-import { CalendarIntegration } from './components/CalendarIntegration';
 import { Settings } from './components/Settings';
 import { AppIcon } from './components/AppIcon';
 import { onDeviceAIService } from './services/onDeviceAIService';
@@ -50,9 +49,8 @@ const MainApp: React.FC<{ pin: string, isDarkMode: boolean, onToggleTheme: () =>
     const [tasks, setTasks] = useState<Task[]>([]);
     const [selectedSession, setSelectedSession] = useState<Session | null>(null);
     const [isLoading, setIsLoading] = useState(true);
-    const [view, setView] = useState<'sessions' | 'tasks' | 'calendar'>('sessions');
+    const [view, setView] = useState<'sessions' | 'tasks'>('sessions');
     const [isSettingsOpen, setIsSettingsOpen] = useState(false);
-    const [calendarRefreshKey, setCalendarRefreshKey] = useState(0);
     const [industry, setIndustry] = useState('General');
     const [storageType, setStorageType] = useState<StorageType>(StorageType.BROWSER);
     const [storageProvider, setStorageProvider] = useState<StorageProvider>(new IndexedDBProvider(db));
@@ -268,16 +266,6 @@ const MainApp: React.FC<{ pin: string, isDarkMode: boolean, onToggleTheme: () =>
                         isDarkMode={isDarkMode}
                     />
                 );
-            case 'calendar':
-                return (
-                    <CalendarIntegration
-                        pin={pin}
-                        storageProvider={storageProvider}
-                        showStatus={showStatus}
-                        isDarkMode={isDarkMode}
-                        refreshKey={calendarRefreshKey}
-                    />
-                );
             default:
                 return null;
         }
@@ -346,8 +334,6 @@ const MainApp: React.FC<{ pin: string, isDarkMode: boolean, onToggleTheme: () =>
                 onStorageTypeChange={handleStorageTypeChange}
                 showStatus={showStatus}
                 isDarkMode={isDarkMode}
-                pin={pin}
-                onCalendarConnectionsChange={() => setCalendarRefreshKey((k) => k + 1)}
             />
 
             {confirmDeleteSessionId !== null && (

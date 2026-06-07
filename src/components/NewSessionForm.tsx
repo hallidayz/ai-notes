@@ -142,10 +142,12 @@ export const NewSessionForm: React.FC<NewSessionFormProps> = ({ onAddSession, sh
     return (
         <div className="card new-session">
             <h3>New Session</h3>
-            <form onSubmit={handleSubmit}>
+            <form onSubmit={handleSubmit} autoComplete="off">
                 <div className="form-grid">
                     <input
                         type="text"
+                        name="session-title"
+                        autoComplete="off"
                         placeholder="Session Title"
                         value={sessionTitle}
                         onChange={e => setSessionTitle(e.target.value)}
@@ -153,12 +155,16 @@ export const NewSessionForm: React.FC<NewSessionFormProps> = ({ onAddSession, sh
                     />
                     <input
                         type="text"
+                        name="session-participants"
+                        autoComplete="off"
                         placeholder="Participants (optional)"
                         value={participants}
                         onChange={e => setParticipants(e.target.value)}
                     />
                     <input
                         type="date"
+                        name="session-date"
+                        autoComplete="off"
                         value={date}
                         onChange={e => setDate(e.target.value)}
                         className="grid-col-span-2"

@@ -2,7 +2,6 @@
 import React from 'react';
 import { StorageProvider, StorageType } from '../types';
 import { LocalModels } from './LocalModels';
-import { CalendarSettings } from './CalendarSettings';
 import { AppIcon } from './AppIcon';
 
 interface SettingsProps {
@@ -15,8 +14,6 @@ interface SettingsProps {
     onStorageTypeChange: (type: StorageType) => void;
     showStatus: (msg: string, type: 'success' | 'error' | 'info') => void;
     isDarkMode: boolean;
-    pin: string;
-    onCalendarConnectionsChange?: () => void;
 }
 
 export const Settings: React.FC<SettingsProps> = ({
@@ -29,8 +26,6 @@ export const Settings: React.FC<SettingsProps> = ({
     onStorageTypeChange,
     showStatus,
     isDarkMode,
-    pin,
-    onCalendarConnectionsChange,
 }) => {
     if (!isOpen) return null;
 
@@ -104,20 +99,6 @@ export const Settings: React.FC<SettingsProps> = ({
                             isDarkMode={isDarkMode}
                         />
                     </div>
-                </section>
-
-                <section className="settings-section">
-                    <h3>Calendar Integrations</h3>
-                    <p className="settings-section-desc">
-                        Configure OAuth credentials and connect Google, Outlook, Notion, Apple, or a local device calendar.
-                    </p>
-                    <CalendarSettings
-                        pin={pin}
-                        storageProvider={storageProvider}
-                        showStatus={showStatus}
-                        isDarkMode={isDarkMode}
-                        onConnectionsChange={onCalendarConnectionsChange}
-                    />
                 </section>
 
                 <section className="settings-section">

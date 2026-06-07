@@ -33,12 +33,17 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthenticate, isDarkMo
                         <p>Secure, on-device AI transcription and analysis.</p>
                     </div>
                 </div>
-                <form onSubmit={handleSubmit}>
+                <form onSubmit={handleSubmit} autoComplete="off">
+                    <label htmlFor="app-pin" className="visually-hidden">PIN</label>
                     <input
+                        id="app-pin"
+                        name="pin"
                         type="password"
+                        inputMode="numeric"
                         placeholder="Enter your PIN"
                         value={pin}
                         onChange={e => setPin(e.target.value)}
+                        autoComplete="current-password"
                         autoFocus
                     />
                     <button type="submit" className="btn-primary" disabled={pin.length < 4}>

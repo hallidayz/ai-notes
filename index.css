@@ -1298,16 +1298,6 @@ button {
     color: var(--accent-color);
 }
 
-/* Calendar Integration */
-.calendar-integration .card {
-  transition: transform 0.2s ease, box-shadow 0.2s ease;
-}
-
-.calendar-integration .card:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
-}
-
 .empty-state {
   background: rgba(0, 0, 0, 0.02);
 }
@@ -1411,139 +1401,16 @@ button {
     }
 }
 
-.settings-subheading {
-    font-size: 0.95em;
-    color: var(--text-primary);
-    margin-bottom: 8px;
-}
-
-.settings-oauth-form {
-    margin-bottom: 16px;
-}
-
-.settings-oauth-grid {
-    display: grid;
-    grid-template-columns: 1fr;
-    gap: 16px;
-    margin-bottom: 16px;
-}
-
-@media (min-width: 720px) {
-    .settings-oauth-grid {
-        grid-template-columns: repeat(3, 1fr);
-    }
-}
-
-.settings-oauth-provider {
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-}
-
-.settings-oauth-provider input {
-    padding: 8px 10px;
-    background: var(--input-bg);
-    border: 1px solid var(--input-border);
-    border-radius: 6px;
-    color: var(--text-primary);
-    font-size: 0.85em;
-}
-
-.settings-guide-toggle {
-    margin-bottom: 12px;
-    font-size: 0.85em;
-}
-
-.settings-guide {
-    padding: 16px;
-    margin-bottom: 16px;
-    font-size: 0.85em;
-}
-
-.settings-guide-list {
-    margin-left: 18px;
-    color: var(--text-secondary);
-    line-height: 1.6;
-}
-
-.settings-guide code {
-    font-size: 0.85em;
-    word-break: break-all;
-}
-
-.settings-google-status {
-    padding: 12px 16px;
-    margin-bottom: 16px;
-    font-size: 0.85em;
-    line-height: 1.6;
-}
-
-.settings-calendar-providers {
-    display: grid;
-    grid-template-columns: 1fr;
-    gap: 10px;
-}
-
-@media (min-width: 560px) {
-    .settings-calendar-providers {
-        grid-template-columns: repeat(2, 1fr);
-    }
-}
-
-.settings-calendar-card {
-    padding: 12px;
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-}
-
-.settings-calendar-card-header {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-}
-
-.settings-calendar-desc {
-    display: block;
-    font-size: 0.7em;
-    color: var(--text-tertiary);
-}
-
-.settings-calendar-connected {
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-}
-
-.settings-calendar-actions {
-    display: flex;
-    gap: 8px;
-}
-
-.settings-apple-form {
-    margin-top: 16px;
-    padding: 16px;
-}
-
-.settings-apple-grid {
-    display: grid;
-    grid-template-columns: 1fr;
-    gap: 8px;
-    margin-bottom: 12px;
-}
-
-@media (min-width: 560px) {
-    .settings-apple-grid {
-        grid-template-columns: repeat(3, 1fr);
-    }
-}
-
-.settings-apple-grid input {
-    padding: 8px 10px;
-    background: var(--input-bg);
-    border: 1px solid var(--input-border);
-    border-radius: 6px;
-    color: var(--text-primary);
+.visually-hidden {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
 }
 
 .settings-coming-soon {

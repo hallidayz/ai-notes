@@ -1,5 +1,5 @@
 
-import { Session, Task, StorageProvider, CalendarConnection } from '../types';
+import { Session, Task, StorageProvider } from '../types';
 import { NotesDB } from './notesDB';
 
 export class IndexedDBProvider implements StorageProvider {
@@ -15,9 +15,6 @@ export class IndexedDBProvider implements StorageProvider {
     async getAllTasks() { return this.db.getAllTasks(); }
     async updateTask(task: Task) { return this.db.updateTask(task); }
     async deleteTask(id: number) { return this.db.deleteTask(id); }
-    async saveCalendarConnection(connection: CalendarConnection) { return this.db.addCalendarConnection(connection); }
-    async getAllCalendarConnections() { return this.db.getAllCalendarConnections(); }
-    async deleteCalendarConnection(id: number) { return this.db.deleteCalendarConnection(id); }
     async saveConfig(key: string, value: unknown) { return this.db.saveConfig(key, value); }
     async getConfig(key: string) { return this.db.getConfig(key); }
 }
@@ -42,7 +39,7 @@ export class ServerStorageProvider implements StorageProvider {
         const items = await res.json();
 
         const sessionPromises = items
-            .filter((item: { id: string, data?: { encrypted?: string } }) => item.id !== 'tasks_list' && item.id !== 'calendar_connections' && item.data?.encrypted)
+            .filter((item: { id: string, data?: { encrypted?: string } }) => item.id !== 'tasks_list' && item.data?.encrypted)
             .map(async (item: { id: string, data: { encrypted: string } }) => {
                 try {
                     const decrypted = await CryptoService.decrypt(item.data.encrypted, this.pin);
@@ -160,43 +157,6 @@ export class ServerStorageProvider implements StorageProvider {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ id: 'tasks_list', data: { encrypted: encryptedData } })
-        });
-    }
-    async saveCalendarConnection(connection: CalendarConnection) {
-        const { CryptoService } = await import('./cryptoService');
-        const id = connection.id || Date.now();
-        const connections = await this.getAllCalendarConnections();
-        connections.push({ ...connection, id });
-        const encryptedData = await CryptoService.encrypt(JSON.stringify(connections), this.pin);
-        await fetch('/api/storage/save', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ id: 'calendar_connections', data: { encrypted: encryptedData } })
-        });
-        return id;
-    }
-    async getAllCalendarConnections() {
-        const { CryptoService } = await import('./cryptoService');
-        try {
-            const res = await fetch('/api/storage/list');
-            const files = await res.json();
-            const connFile = files.find((f: { id: string, data: { encrypted?: string } }) => f.id === 'calendar_connections');
-            if (connFile?.data?.encrypted) {
-                const decrypted = await CryptoService.decrypt(connFile.data.encrypted, this.pin);
-                return JSON.parse(decrypted);
-            }
-            return [];
-        } catch { return []; }
-    }
-    async deleteCalendarConnection(id: number) {
-        const { CryptoService } = await import('./cryptoService');
-        const connections = await this.getAllCalendarConnections();
-        const filtered = connections.filter(c => c.id !== id);
-        const encryptedData = await CryptoService.encrypt(JSON.stringify(filtered), this.pin);
-        await fetch('/api/storage/save', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ id: 'calendar_connections', data: { encrypted: encryptedData } })
         });
     }
     async saveConfig(key: string, value: unknown) {

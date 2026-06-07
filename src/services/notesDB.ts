@@ -1,5 +1,5 @@
 
-import { Session, Task, CalendarConnection } from '../types';
+import { Session, Task } from '../types';
 
 export class NotesDB {
     private db: IDBDatabase | null = null;
@@ -7,8 +7,6 @@ export class NotesDB {
     private readonly SESSIONS_STORE = 'sessions';
     private readonly TASKS_STORE = 'tasks';
     private readonly CONFIG_STORE = 'config';
-    private readonly CALENDAR_STORE = 'calendar_connections';
-
     constructor() {
         this.init();
     }
@@ -28,9 +26,6 @@ export class NotesDB {
                 }
                 if (!db.objectStoreNames.contains(this.CONFIG_STORE)) {
                     db.createObjectStore(this.CONFIG_STORE, { keyPath: 'key' });
-                }
-                if (!db.objectStoreNames.contains(this.CALENDAR_STORE)) {
-                    db.createObjectStore(this.CALENDAR_STORE, { keyPath: 'id', autoIncrement: true });
                 }
             };
 
@@ -240,40 +235,6 @@ export class NotesDB {
             const store = transaction.objectStore(this.SESSIONS_STORE);
             const request = store.get(sessionId);
             request.onsuccess = () => resolve(request.result?.audioBlob);
-            request.onerror = () => reject(request.error);
-        });
-    }
-
-    // Calendar Connection Methods
-    public async addCalendarConnection(connection: CalendarConnection): Promise<number> {
-        const db = await this.getDb();
-        return new Promise((resolve, reject) => {
-            const transaction = db.transaction(this.CALENDAR_STORE, 'readwrite');
-            const store = transaction.objectStore(this.CALENDAR_STORE);
-            const request = store.add(connection);
-            request.onsuccess = () => resolve(request.result as number);
-            request.onerror = () => reject(request.error);
-        });
-    }
-
-    public async getAllCalendarConnections(): Promise<CalendarConnection[]> {
-        const db = await this.getDb();
-        return new Promise((resolve, reject) => {
-            const transaction = db.transaction(this.CALENDAR_STORE, 'readonly');
-            const store = transaction.objectStore(this.CALENDAR_STORE);
-            const request = store.getAll();
-            request.onsuccess = () => resolve(request.result);
-            request.onerror = () => reject(request.error);
-        });
-    }
-
-    public async deleteCalendarConnection(id: number): Promise<void> {
-        const db = await this.getDb();
-        return new Promise((resolve, reject) => {
-            const transaction = db.transaction(this.CALENDAR_STORE, 'readwrite');
-            const store = transaction.objectStore(this.CALENDAR_STORE);
-            const request = store.delete(id);
-            request.onsuccess = () => resolve();
             request.onerror = () => reject(request.error);
         });
     }

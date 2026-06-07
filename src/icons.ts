@@ -12,17 +12,12 @@ export type IconName =
     | 'info'
     | 'chevron-left'
     | 'loader'
-    | 'calendar'
     | 'warning'
     | 'plus'
     | 'summary'
     | 'action-items'
     | 'outline'
     | 'ai-chip'
-    | 'google'
-    | 'microsoft'
-    | 'notion'
-    | 'apple'
     | 'logo';
 
 export const iconSrc = (name: IconName, isDarkMode: boolean, size = 24): string => {

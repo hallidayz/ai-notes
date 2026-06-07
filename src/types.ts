@@ -43,14 +43,6 @@ export enum StorageType {
     FILESYSTEM = 'filesystem'
 }
 
-export interface CalendarConnection {
-    id?: number;
-    provider: 'google' | 'microsoft' | 'notion' | 'apple' | 'local';
-    encryptedTokens: string; // Encrypted JSON string of tokens/credentials
-    accountName?: string;
-    timestamp: number;
-}
-
 export interface LocalModel {
     id: string;
     name: string;
@@ -79,9 +71,6 @@ export interface StorageProvider {
     getAllTasks(): Promise<Task[]>;
     updateTask(task: Task): Promise<void>;
     deleteTask(id: number): Promise<void>;
-    saveCalendarConnection(connection: CalendarConnection): Promise<number>;
-    getAllCalendarConnections(): Promise<CalendarConnection[]>;
-    deleteCalendarConnection(id: number): Promise<void>;
     saveConfig(key: string, value: unknown): Promise<void>;
     getConfig(key: string): Promise<unknown>;
 }

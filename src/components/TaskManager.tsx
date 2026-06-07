@@ -178,12 +178,15 @@ export const TaskManager: React.FC<TaskManagerProps> = ({
 
             <div className="card">
                 <h3>Add New Task</h3>
-                <form onSubmit={handleSubmit} className="task-form">
+                <form onSubmit={handleSubmit} className="task-form" autoComplete="off">
                     <div className="form-grid">
                         <div className="grid-col-span-2">
-                            <label className="input-label">Task Title</label>
+                            <label className="input-label" htmlFor="new-task-title">Task Title</label>
                             <input
+                                id="new-task-title"
                                 type="text"
+                                name="task-title"
+                                autoComplete="off"
                                 placeholder="What needs to be done?"
                                 value={newTaskTitle}
                                 onChange={e => setNewTaskTitle(e.target.value)}
