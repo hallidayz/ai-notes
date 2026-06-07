@@ -45,7 +45,7 @@ export enum StorageType {
 
 export interface CalendarConnection {
     id?: number;
-    provider: 'google' | 'microsoft' | 'notion' | 'apple';
+    provider: 'google' | 'microsoft' | 'notion' | 'apple' | 'local';
     encryptedTokens: string; // Encrypted JSON string of tokens/credentials
     accountName?: string;
     timestamp: number;

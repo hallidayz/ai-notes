@@ -1,11 +1,11 @@
+import './loadEnv.js';
 import axios from 'axios';
-import { OAuth2Client } from 'google-auth-library';
-
-// Google Calendar Config
-const googleClient = new OAuth2Client(
-  process.env.GOOGLE_CLIENT_ID,
-  process.env.GOOGLE_CLIENT_SECRET
-);
+import { GoogleBackend } from './google.js';
+import {
+  getMicrosoftCredentials,
+  getNotionCredentials,
+  loadOAuthConfig,
+} from './oauthConfig.js';
 
 // Microsoft Calendar Config (Azure AD)
 const MS_AUTH_URL = 'https://login.microsoftonline.com/common/oauth2/v2.0/authorize';
@@ -17,29 +17,20 @@ const NOTION_AUTH_URL = 'https://api.notion.com/v1/oauth/authorize';
 const NOTION_TOKEN_URL = 'https://api.notion.com/v1/oauth/token';
 
 export const CalendarBackend = {
-  // Google
-  getGoogleAuthUrl: (redirectUri: string) => {
-    return googleClient.generateAuthUrl({
-      access_type: 'offline',
-      scope: ['https://www.googleapis.com/auth/calendar.readonly'],
-      redirect_uri: redirectUri,
-    });
-  },
-  exchangeGoogleCode: async (code: string, redirectUri: string) => {
-    const { tokens } = await googleClient.getToken({ code, redirect_uri: redirectUri });
-    return tokens;
-  },
-  getGoogleEvents: async (accessToken: string) => {
-    const response = await axios.get('https://www.googleapis.com/calendar/v3/calendars/primary/events', {
-      headers: { Authorization: `Bearer ${accessToken}` },
-    });
-    return response.data.items;
-  },
+  // Google (Calendar, Gmail, Drive)
+  getGoogleAuthUrl: (redirectUri: string) => GoogleBackend.getAuthUrl(redirectUri),
+  exchangeGoogleCode: (code: string, redirectUri: string) => GoogleBackend.exchangeCode(code, redirectUri),
+  getGoogleData: (tokens: Record<string, unknown>) => GoogleBackend.fetchAllData(tokens),
 
   // Microsoft
-  getMicrosoftAuthUrl: (redirectUri: string) => {
+  getMicrosoftAuthUrl: async (redirectUri: string) => {
+    const config = await loadOAuthConfig();
+    const creds = getMicrosoftCredentials(config);
+    if (!creds) {
+      throw new Error('Outlook is not configured. Open Settings → Calendar Integrations and add your Microsoft Client ID and Secret.');
+    }
     const params = new URLSearchParams({
-      client_id: process.env.MICROSOFT_CLIENT_ID!,
+      client_id: creds.clientId,
       response_type: 'code',
       redirect_uri: redirectUri,
       scope: MS_SCOPES,
@@ -48,9 +39,12 @@ export const CalendarBackend = {
     return `${MS_AUTH_URL}?${params.toString()}`;
   },
   exchangeMicrosoftCode: async (code: string, redirectUri: string) => {
+    const config = await loadOAuthConfig();
+    const creds = getMicrosoftCredentials(config);
+    if (!creds) throw new Error('Microsoft OAuth is not configured.');
     const params = new URLSearchParams({
-      client_id: process.env.MICROSOFT_CLIENT_ID!,
-      client_secret: process.env.MICROSOFT_CLIENT_SECRET!,
+      client_id: creds.clientId,
+      client_secret: creds.clientSecret,
       code,
       redirect_uri: redirectUri,
       grant_type: 'authorization_code',
@@ -68,9 +62,14 @@ export const CalendarBackend = {
   },
 
   // Notion
-  getNotionAuthUrl: (redirectUri: string) => {
+  getNotionAuthUrl: async (redirectUri: string) => {
+    const config = await loadOAuthConfig();
+    const creds = getNotionCredentials(config);
+    if (!creds) {
+      throw new Error('Notion is not configured. Open Settings → Calendar Integrations and add your Notion Client ID and Secret.');
+    }
     const params = new URLSearchParams({
-      client_id: process.env.NOTION_CLIENT_ID!,
+      client_id: creds.clientId,
       redirect_uri: redirectUri,
       response_type: 'code',
       owner: 'user',
@@ -78,7 +77,10 @@ export const CalendarBackend = {
     return `${NOTION_AUTH_URL}?${params.toString()}`;
   },
   exchangeNotionCode: async (code: string, redirectUri: string) => {
-    const auth = Buffer.from(`${process.env.NOTION_CLIENT_ID}:${process.env.NOTION_CLIENT_SECRET}`).toString('base64');
+    const config = await loadOAuthConfig();
+    const creds = getNotionCredentials(config);
+    if (!creds) throw new Error('Notion OAuth is not configured.');
+    const auth = Buffer.from(`${creds.clientId}:${creds.clientSecret}`).toString('base64');
     const response = await axios.post(NOTION_TOKEN_URL, {
       grant_type: 'authorization_code',
       code,

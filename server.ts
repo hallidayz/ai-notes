@@ -1,3 +1,4 @@
+import "./server/loadEnv.js";
 import express from "express";
 import path from "path";
 import fs from "fs/promises";
@@ -5,6 +6,9 @@ import session from "express-session";
 import cookieParser from "cookie-parser";
 import crypto from "crypto";
 import { CalendarBackend } from "./server/calendar";
+import { GoogleBackend } from "./server/google";
+import { getOAuthStatus, loadOAuthConfig, saveOAuthConfig } from "./server/oauthConfig";
+import { oauthErrorPage, oauthSuccessPage } from "./server/oauthPages";
 import { HOST, PORT, getServerUrls } from "./server/config";
 
 async function startServer() {
@@ -27,42 +31,85 @@ async function startServer() {
   const STORAGE_DIR = path.join(process.cwd(), 'local_storage');
   await fs.mkdir(STORAGE_DIR, { recursive: true });
 
-  // Calendar Auth Routes
-  app.get("/api/auth/google/url", (req, res) => {
-    const redirectUri = `${req.protocol}://${req.get('host')}/auth/google/callback`;
-    const url = CalendarBackend.getGoogleAuthUrl(redirectUri);
-    res.json({ url });
-  });
-
-  app.get("/auth/google/callback", async (req, res) => {
-    const { code } = req.query;
-    const redirectUri = `${req.protocol}://${req.get('host')}/auth/google/callback`;
+  // OAuth credential config (managed from Settings UI)
+  app.get("/api/config/oauth", async (_req, res) => {
     try {
-      const tokens = await CalendarBackend.exchangeGoogleCode(code as string, redirectUri);
-      res.send(`
-        <html>
-          <body>
-            <script>
-              window.opener.postMessage({ 
-                type: 'OAUTH_AUTH_SUCCESS', 
-                provider: 'google', 
-                tokens: ${JSON.stringify(tokens)} 
-              }, window.location.origin);
-              window.close();
-            </script>
-            <p>Authentication successful. This window should close automatically.</p>
-          </body>
-        </html>
-      `);
+      res.json(await getOAuthStatus());
     } catch {
-      res.status(500).send("Google Auth failed");
+      res.status(500).json({ error: 'Failed to load OAuth configuration status.' });
     }
   });
 
-  app.get("/api/auth/microsoft/url", (req, res) => {
-    const redirectUri = `${req.protocol}://${req.get('host')}/auth/microsoft/callback`;
-    const url = CalendarBackend.getMicrosoftAuthUrl(redirectUri);
-    res.json({ url });
+  app.post("/api/config/oauth", async (req, res) => {
+    try {
+      const { google, microsoft, notion } = req.body ?? {};
+      const existing = await loadOAuthConfig();
+      const next = {
+        google: google?.clientId && google?.clientSecret
+          ? { clientId: google.clientId, clientSecret: google.clientSecret }
+          : existing.google,
+        microsoft: microsoft?.clientId && microsoft?.clientSecret
+          ? { clientId: microsoft.clientId, clientSecret: microsoft.clientSecret }
+          : existing.microsoft,
+        notion: notion?.clientId && notion?.clientSecret
+          ? { clientId: notion.clientId, clientSecret: notion.clientSecret }
+          : existing.notion,
+      };
+      await saveOAuthConfig(next);
+      res.json({ success: true, status: await getOAuthStatus() });
+    } catch {
+      res.status(500).json({ error: 'Failed to save OAuth configuration.' });
+    }
+  });
+
+  // Calendar Auth Routes
+  app.get("/api/auth/google/url", async (req, res) => {
+    try {
+      if (!(await GoogleBackend.isConfigured())) {
+        return res.status(503).json({
+          error: 'Google is not configured. Open Settings → Calendar Integrations and add your Google Client ID and Secret.',
+        });
+      }
+      const origin = `${req.protocol}://${req.get('host')}`;
+      const redirectUri = `${origin}/auth/google/callback`;
+      const url = await CalendarBackend.getGoogleAuthUrl(redirectUri);
+      res.json({ url, redirectUri });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Google OAuth failed.';
+      res.status(503).json({ error: message });
+    }
+  });
+
+  app.get("/auth/google/callback", async (req, res) => {
+    const origin = `${req.protocol}://${req.get('host')}`;
+    const redirectUri = `${origin}/auth/google/callback`;
+    const { code, error, error_description } = req.query;
+
+    if (error || !code) {
+      const message = String(error_description || error || 'Google authorization was cancelled.');
+      return res.status(400).send(oauthErrorPage(origin, 'google', message));
+    }
+
+    try {
+      const tokens = await CalendarBackend.exchangeGoogleCode(code as string, redirectUri);
+      const { tokens: validTokens, status } = await GoogleBackend.verifyServices(tokens);
+      res.send(oauthSuccessPage(origin, 'google', { ...validTokens, googleStatus: status }));
+    } catch (err) {
+      console.error('Google auth callback failed', err);
+      const message = err instanceof Error ? err.message : 'Google authentication failed.';
+      res.status(500).send(oauthErrorPage(origin, 'google', message));
+    }
+  });
+
+  app.get("/api/auth/microsoft/url", async (req, res) => {
+    try {
+      const redirectUri = `${req.protocol}://${req.get('host')}/auth/microsoft/callback`;
+      const url = await CalendarBackend.getMicrosoftAuthUrl(redirectUri);
+      res.json({ url });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Microsoft OAuth failed.';
+      res.status(503).json({ error: message });
+    }
   });
 
   app.get("/auth/microsoft/callback", async (req, res) => {
@@ -90,10 +137,15 @@ async function startServer() {
     }
   });
 
-  app.get("/api/auth/notion/url", (req, res) => {
-    const redirectUri = `${req.protocol}://${req.get('host')}/auth/notion/callback`;
-    const url = CalendarBackend.getNotionAuthUrl(redirectUri);
-    res.json({ url });
+  app.get("/api/auth/notion/url", async (req, res) => {
+    try {
+      const redirectUri = `${req.protocol}://${req.get('host')}/auth/notion/callback`;
+      const url = await CalendarBackend.getNotionAuthUrl(redirectUri);
+      res.json({ url });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Notion OAuth failed.';
+      res.status(503).json({ error: message });
+    }
   });
 
   app.get("/auth/notion/callback", async (req, res) => {
@@ -126,23 +178,22 @@ async function startServer() {
     const { connections } = req.body; // Array of { provider, tokens }
 
     if (!connections || !Array.isArray(connections)) {
-      return res.json([]);
+      return res.json({ events: [], refreshedConnections: [], googleStatus: null });
     }
+
+    const refreshedConnections: Array<{ provider: string; tokens: Record<string, unknown> }> = [];
+    let googleStatus = null;
 
     const eventsPromises = connections.map(async (conn) => {
       const { provider, tokens } = conn;
-      if (!tokens?.access_token && provider !== 'apple') return [];
+      if (!tokens?.access_token && provider !== 'apple' && provider !== 'local') return [];
 
       try {
         if (provider === 'google') {
-          const gEvents = await CalendarBackend.getGoogleEvents(tokens.access_token);
-          return gEvents.map((e: { id: string, summary: string, start: { dateTime?: string, date?: string }, end: { dateTime?: string, date?: string } }) => ({
-            id: e.id,
-            title: e.summary,
-            start: e.start.dateTime || e.start.date,
-            end: e.end.dateTime || e.end.date,
-            provider: 'google'
-          }));
+          const result = await CalendarBackend.getGoogleData(tokens);
+          refreshedConnections.push({ provider: 'google', tokens: result.tokens });
+          googleStatus = result.status;
+          return result.items;
         } else if (provider === 'microsoft') {
           const mEvents = await CalendarBackend.getMicrosoftEvents(tokens.access_token);
           return mEvents.map((e: { id: string, subject: string, start: { dateTime: string }, end: { dateTime: string } }) => ({
@@ -163,6 +214,8 @@ async function startServer() {
         } else if (provider === 'apple') {
           const aEvents = await CalendarBackend.getAppleEvents(tokens);
           return aEvents;
+        } else if (provider === 'local') {
+          return Array.isArray(tokens?.events) ? tokens.events : [];
         }
       } catch (e) {
         console.error(`${provider} events fetch error`, e);
@@ -173,7 +226,7 @@ async function startServer() {
     const results = await Promise.all(eventsPromises);
     const events = results.flat();
 
-    res.json(events);
+    res.json({ events, refreshedConnections, googleStatus });
   });
 
   // API Routes for Server-side storage

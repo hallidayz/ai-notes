@@ -52,6 +52,7 @@ const MainApp: React.FC<{ pin: string, isDarkMode: boolean, onToggleTheme: () =>
     const [isLoading, setIsLoading] = useState(true);
     const [view, setView] = useState<'sessions' | 'tasks' | 'calendar'>('sessions');
     const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+    const [calendarRefreshKey, setCalendarRefreshKey] = useState(0);
     const [industry, setIndustry] = useState('General');
     const [storageType, setStorageType] = useState<StorageType>(StorageType.BROWSER);
     const [storageProvider, setStorageProvider] = useState<StorageProvider>(new IndexedDBProvider(db));
@@ -268,7 +269,15 @@ const MainApp: React.FC<{ pin: string, isDarkMode: boolean, onToggleTheme: () =>
                     />
                 );
             case 'calendar':
-                return <CalendarIntegration pin={pin} storageProvider={storageProvider} showStatus={showStatus} isDarkMode={isDarkMode} />;
+                return (
+                    <CalendarIntegration
+                        pin={pin}
+                        storageProvider={storageProvider}
+                        showStatus={showStatus}
+                        isDarkMode={isDarkMode}
+                        refreshKey={calendarRefreshKey}
+                    />
+                );
             default:
                 return null;
         }
@@ -337,6 +346,8 @@ const MainApp: React.FC<{ pin: string, isDarkMode: boolean, onToggleTheme: () =>
                 onStorageTypeChange={handleStorageTypeChange}
                 showStatus={showStatus}
                 isDarkMode={isDarkMode}
+                pin={pin}
+                onCalendarConnectionsChange={() => setCalendarRefreshKey((k) => k + 1)}
             />
 
             {confirmDeleteSessionId !== null && (

@@ -16,47 +16,86 @@ export const NewSessionForm: React.FC<NewSessionFormProps> = ({ onAddSession, sh
     const [notes, setNotes] = useState('');
     const [isRecording, setIsRecording] = useState(false);
     const [isSaving, setIsSaving] = useState(false);
-    const [recordingType, setRecordingType] = useState<'mic' | 'system'>('system');
+    const [recordingType, setRecordingType] = useState<'mic' | 'system'>('mic');
     const [audioBlob, setAudioBlob] = useState<Blob | null>(null);
     const [duration, setDuration] = useState(0);
     const mediaRecorderRef = useRef<MediaRecorder | null>(null);
     const chunksRef = useRef<Blob[]>([]);
     const timerRef = useRef<number | null>(null);
 
+    const stopStream = (stream: MediaStream) => {
+        stream.getTracks().forEach(track => track.stop());
+    };
+
+    const getRecordingErrorMessage = (err: unknown): string => {
+        if (err instanceof DOMException) {
+            if (err.name === 'NotAllowedError') {
+                return recordingType === 'mic'
+                    ? 'Microphone access was denied. Allow microphone permission in your browser settings, then try again.'
+                    : 'Screen sharing was cancelled or denied. Try Microphone mode, or enable "Share system audio" in the picker.';
+            }
+            if (err.name === 'NotFoundError') {
+                return 'No microphone was found. Connect an audio input device and try again.';
+            }
+            if (err.name === 'NotSupportedError') {
+                return 'Recording is not supported in this browser.';
+            }
+        }
+        return 'Could not start recording. Check permissions and try again.';
+    };
+
     const handleStartRecording = async () => {
+        let stream: MediaStream | null = null;
         try {
-            let stream: MediaStream;
+            if (!navigator.mediaDevices?.getUserMedia) {
+                showStatus('Recording is not supported in this browser.', 'error');
+                return;
+            }
+
             if (recordingType === 'mic') {
                 stream = await navigator.mediaDevices.getUserMedia({ audio: true });
             } else {
                 stream = await navigator.mediaDevices.getDisplayMedia({
                     video: true,
-                    audio: true
+                    audio: true,
                 });
+                stream.getVideoTracks().forEach(track => track.stop());
+
                 if (!stream.getAudioTracks().length) {
-                    showStatus("Your system audio is not being shared. Please check the 'Share system audio' box in the prompt.", 'error', 5000);
+                    stopStream(stream);
+                    showStatus("System audio was not shared. Enable 'Share system audio' in the browser picker, or switch to Microphone.", 'error', 6000);
                     return;
                 }
             }
-            
+
             setIsRecording(true);
             setDuration(0);
             timerRef.current = window.setInterval(() => setDuration(prev => prev + 1), 1000);
 
-            mediaRecorderRef.current = new MediaRecorder(stream);
+            const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+                ? 'audio/webm;codecs=opus'
+                : 'audio/webm';
+
+            mediaRecorderRef.current = new MediaRecorder(stream, { mimeType });
             mediaRecorderRef.current.ondataavailable = (e) => {
                 if (e.data.size > 0) chunksRef.current.push(e.data);
             };
             mediaRecorderRef.current.onstop = () => {
-                const blob = new Blob(chunksRef.current, { type: 'audio/webm' });
+                const blob = new Blob(chunksRef.current, { type: mimeType });
                 setAudioBlob(blob);
                 chunksRef.current = [];
-                 stream.getTracks().forEach(track => track.stop());
+                stopStream(stream!);
             };
             mediaRecorderRef.current.start();
         } catch (err) {
+            if (stream) stopStream(stream);
+            setIsRecording(false);
+            if (timerRef.current) {
+                clearInterval(timerRef.current);
+                timerRef.current = null;
+            }
             console.error("Error starting recording:", err);
-            showStatus("Could not start recording. Please ensure you have given microphone permissions and selected a source.", 'error');
+            showStatus(getRecordingErrorMessage(err), 'error', 6000);
         }
     };
 
