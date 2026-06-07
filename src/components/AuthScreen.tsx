@@ -1,5 +1,8 @@
 
 import React, { useState } from 'react';
+import { ThemeToggle } from './ThemeToggle';
+import { AppIcon } from './AppIcon';
+import { BRAND } from '../branding';
 
 interface AuthScreenProps {
     onAuthenticate: (pin: string) => void;
@@ -20,13 +23,16 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthenticate, isDarkMo
     return (
         <div className="auth-screen">
             <div className="auth-card">
-                <div style={{ position: 'absolute', top: '20px', right: '20px' }}>
-                    <button className="theme-toggle" onClick={onToggleTheme}>
-                        {isDarkMode ? '☀️' : '🌙'}
-                    </button>
+                <div className="header-actions">
+                    <ThemeToggle isDarkMode={isDarkMode} onToggle={onToggleTheme} />
                 </div>
-                <h1>AI Notes</h1>
-                <p>Secure, on-device AI transcription and analysis.</p>
+                <div className="brand-lockup brand-lockup-centered">
+                    <AppIcon name="logo" size={48} isDarkMode={isDarkMode} className="brand-logo" />
+                    <div>
+                        <h1>{BRAND.name}</h1>
+                        <p>Secure, on-device AI transcription and analysis.</p>
+                    </div>
+                </div>
                 <form onSubmit={handleSubmit}>
                     <input
                         type="password"

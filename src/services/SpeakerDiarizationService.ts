@@ -56,7 +56,9 @@ export class SpeakerDiarizationService {
             const transformers = await import('@huggingface/transformers');
             const env = transformers.env;
             if (typeof env !== 'undefined') {
-                env.remoteHost = typeof window !== 'undefined' && window.location ? window.location.origin : 'http://localhost:3001';
+                env.remoteHost = typeof window !== 'undefined' && window.location
+                    ? window.location.origin
+                    : 'http://localhost:4783';
             }
             this.speakerModel = await transformers.pipeline(
                 'feature-extraction',

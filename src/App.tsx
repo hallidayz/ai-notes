@@ -12,7 +12,9 @@ import { SessionDetailModal } from './components/SessionDetailModal';
 import { TaskManager } from './components/TaskManager';
 import { CalendarIntegration } from './components/CalendarIntegration';
 import { Settings } from './components/Settings';
+import { AppIcon } from './components/AppIcon';
 import { onDeviceAIService } from './services/onDeviceAIService';
+import { BRAND } from './branding';
 
 const db = new NotesDB();
 
@@ -246,8 +248,8 @@ const MainApp: React.FC<{ pin: string, isDarkMode: boolean, onToggleTheme: () =>
             case 'sessions':
                 return (
                     <>
-                        <NewSessionForm onAddSession={handleAddSession} showStatus={showStatus} />
-                        <SessionsList sessions={sessions} onSelect={setSelectedSession} onDelete={handleDeleteSession} />
+                        <NewSessionForm onAddSession={handleAddSession} showStatus={showStatus} isDarkMode={isDarkMode} />
+                        <SessionsList sessions={sessions} onSelect={setSelectedSession} onDelete={handleDeleteSession} isDarkMode={isDarkMode} />
                     </>
                 );
             case 'tasks':
@@ -262,10 +264,11 @@ const MainApp: React.FC<{ pin: string, isDarkMode: boolean, onToggleTheme: () =>
                         storageProvider={storageProvider}
                         industry={industry}
                         onUpdateSession={handleUpdateSession}
+                        isDarkMode={isDarkMode}
                     />
                 );
             case 'calendar':
-                return <CalendarIntegration pin={pin} storageProvider={storageProvider} showStatus={showStatus} />;
+                return <CalendarIntegration pin={pin} storageProvider={storageProvider} showStatus={showStatus} isDarkMode={isDarkMode} />;
             default:
                 return null;
         }
@@ -281,42 +284,20 @@ const MainApp: React.FC<{ pin: string, isDarkMode: boolean, onToggleTheme: () =>
                         title="Settings"
                         aria-label="Settings"
                     >
-                        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                            <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/>
-                            <circle cx="12" cy="12" r="3"/>
-                        </svg>
+                        <AppIcon name="settings" size={20} isDarkMode={isDarkMode} />
                     </button>
                     <ThemeToggle isDarkMode={isDarkMode} onToggle={onToggleTheme} />
                 </div>
-                <h1>AI Notes</h1>
-                <p>Private, Secure, On-Device Intelligence</p>
-                
-                <div className="storage-settings">
-                    <p style={{fontSize: '0.8em', fontWeight: 600, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.05em'}}>Storage Location</p>
-                    <div style={{display: 'flex', gap: '10px'}}>
-                        <div 
-                            className={`storage-option ${storageType === StorageType.BROWSER ? 'active' : ''}`}
-                            onClick={() => handleStorageTypeChange(StorageType.BROWSER)}
-                        >
-                            <div className="storage-option-info">
-                                <span className="storage-option-title">Browser (IndexedDB)</span>
-                                <span className="storage-option-desc">Fastest, fully offline, data stays in this browser.</span>
-                            </div>
-                        </div>
-                        <div 
-                            className={`storage-option ${storageType === StorageType.SERVER ? 'active' : ''}`}
-                            onClick={() => handleStorageTypeChange(StorageType.SERVER)}
-                        >
-                            <div className="storage-option-info">
-                                <span className="storage-option-title">Server (Cloud)</span>
-                                <span className="storage-option-desc">Sync across devices, data stored on our secure server.</span>
-                            </div>
-                        </div>
+                <div className="brand-lockup">
+                    <AppIcon name="logo" size={40} isDarkMode={isDarkMode} className="brand-logo" />
+                    <div>
+                        <h1>{BRAND.name}</h1>
+                        <p>{BRAND.tagline}</p>
                     </div>
                 </div>
 
                 <div className="privacy-badge">
-                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16"><path d="M8 1a2 2 0 0 1 2 2v4H6V3a2 2 0 0 1 2-2zm3 6V3a3 3 0 0 0-6 0v4a2 2 0 0 0-2 2v5a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2z"/></svg>
+                    <AppIcon name="shield" size={16} isDarkMode={isDarkMode} />
                     End-to-End Encrypted & On-Device AI
                 </div>
             </header>
@@ -342,6 +323,7 @@ const MainApp: React.FC<{ pin: string, isDarkMode: boolean, onToggleTheme: () =>
                     industry={industry}
                     storageProvider={storageProvider}
                     showStatus={showStatus}
+                    isDarkMode={isDarkMode}
                 />
             )}
 
@@ -351,7 +333,10 @@ const MainApp: React.FC<{ pin: string, isDarkMode: boolean, onToggleTheme: () =>
                 industry={industry}
                 onIndustryChange={handleIndustryChange}
                 storageProvider={storageProvider}
+                storageType={storageType}
+                onStorageTypeChange={handleStorageTypeChange}
                 showStatus={showStatus}
+                isDarkMode={isDarkMode}
             />
 
             {confirmDeleteSessionId !== null && (

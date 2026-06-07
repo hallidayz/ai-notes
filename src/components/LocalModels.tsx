@@ -1,14 +1,15 @@
 
 import React, { useState, useEffect } from 'react';
-import { Check, Download, Loader2, Info, ChevronLeft } from 'lucide-react';
 import { LocalModel, ModelConfig, StorageProvider } from '../types';
 import { onDeviceAIService } from '../services/onDeviceAIService';
+import { AppIcon } from './AppIcon';
 
 interface LocalModelsProps {
     storageProvider: StorageProvider;
     onBack?: () => void;
     showStatus: (msg: string, type: 'success' | 'error' | 'info') => void;
     embedded?: boolean;
+    isDarkMode?: boolean;
 }
 
 const AVAILABLE_MODELS: LocalModel[] = [
@@ -72,7 +73,7 @@ const AVAILABLE_MODELS: LocalModel[] = [
     }
 ];
 
-export const LocalModels: React.FC<LocalModelsProps> = ({ storageProvider, onBack, showStatus, embedded = false }) => {
+export const LocalModels: React.FC<LocalModelsProps> = ({ storageProvider, onBack, showStatus, embedded = false, isDarkMode = false }) => {
     const [config, setConfig] = useState<ModelConfig>({
         transcriptionModelId: 'whisper-tiny-en',
         analysisModelId: 'flan-t5-small'
@@ -163,7 +164,7 @@ export const LocalModels: React.FC<LocalModelsProps> = ({ storageProvider, onBac
                 <div className="local-model-radio">
                     {isSelected ? (
                         <div className="local-model-radio-selected">
-                            <Check className="w-4 h-4" />
+                            <AppIcon name="check" size={14} isDarkMode={isDarkMode} />
                         </div>
                     ) : (
                         <div className="local-model-radio-empty" />
@@ -174,7 +175,7 @@ export const LocalModels: React.FC<LocalModelsProps> = ({ storageProvider, onBac
                     <div className="local-model-name">
                         <h4>{model.name}</h4>
                         {isDownloaded && !isSelected && (
-                            <Check className="local-model-check" />
+                            <AppIcon name="check" size={12} isDarkMode={isDarkMode} className="local-model-check" />
                         )}
                     </div>
                     <p className="local-model-meta">
@@ -182,7 +183,7 @@ export const LocalModels: React.FC<LocalModelsProps> = ({ storageProvider, onBac
                     </p>
                     {isDownloaded && (
                         <div className="local-model-downloaded">
-                            <Check className="local-model-check" />
+                            <AppIcon name="check" size={12} isDarkMode={isDarkMode} className="local-model-check" />
                             <span>Downloaded</span>
                         </div>
                     )}
@@ -191,11 +192,11 @@ export const LocalModels: React.FC<LocalModelsProps> = ({ storageProvider, onBac
                 <div className="local-model-action">
                     {isDownloading ? (
                         <div className="local-model-progress">
-                            <Loader2 className="local-model-spinner" />
+                            <AppIcon name="loader" size={20} isDarkMode={isDarkMode} className="app-icon-spin" />
                             <span>{Math.round(downloadProgress)}%</span>
                         </div>
                     ) : !isDownloaded ? (
-                        <Download className="local-model-download-icon" />
+                        <AppIcon name="download" size={20} isDarkMode={isDarkMode} className="local-model-download-icon" />
                     ) : null}
                 </div>
             </div>
@@ -205,7 +206,7 @@ export const LocalModels: React.FC<LocalModelsProps> = ({ storageProvider, onBac
     const content = (
         <>
             <div className="local-models-info">
-                <Info className="local-models-info-icon" />
+                <AppIcon name="info" size={18} isDarkMode={isDarkMode} className="local-models-info-icon" />
                 <p>
                     These models run entirely on your device. Downloading them may take a few moments depending on your connection. Once downloaded, they work fully offline.
                 </p>
@@ -227,7 +228,7 @@ export const LocalModels: React.FC<LocalModelsProps> = ({ storageProvider, onBac
         <div className="local-models-page">
             <div className="local-models-header">
                 <button onClick={onBack} className="local-models-back" aria-label="Go back">
-                    <ChevronLeft className="w-6 h-6" />
+                    <AppIcon name="chevron-left" size={24} isDarkMode={isDarkMode} />
                 </button>
                 <h2>Local models</h2>
             </div>

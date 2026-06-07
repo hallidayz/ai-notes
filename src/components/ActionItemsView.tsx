@@ -1,20 +1,25 @@
 import React from 'react';
 import { TodoItem } from '../types';
+import { AppIcon } from './AppIcon';
 
 interface ActionItemsViewProps {
     todoItems: TodoItem[];
     onToggle: (index: number) => void;
     onPromote: (todo: TodoItem, index: number) => void;
+    isDarkMode: boolean;
 }
 
-export const ActionItemsView: React.FC<ActionItemsViewProps> = ({ todoItems, onToggle, onPromote }) => {
+export const ActionItemsView: React.FC<ActionItemsViewProps> = ({ todoItems, onToggle, onPromote, isDarkMode }) => {
     if (!todoItems || todoItems.length === 0) {
         return null;
     }
 
     return (
         <div className="analysis-subsection">
-            <h4>&#x2705; Action Items</h4>
+            <h4 className="section-heading-icon">
+                <AppIcon name="action-items" size={16} isDarkMode={isDarkMode} />
+                Action Items
+            </h4>
             <ul className="action-items-list">
                 {todoItems.map((todo, index) => (
                     <li key={index} className={`todo-item ${todo.completed ? 'completed' : ''}`}>
@@ -29,7 +34,7 @@ export const ActionItemsView: React.FC<ActionItemsViewProps> = ({ todoItems, onT
                                 className="btn-promote-task"
                                 title="Promote to Task"
                                 onClick={() => onPromote(todo, index)}>
-                                &#x2795;
+                                <AppIcon name="plus" size={14} isDarkMode={isDarkMode} />
                             </button>
                         )}
                     </li>

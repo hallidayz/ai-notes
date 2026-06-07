@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { motion } from 'motion/react';
-import { Calendar } from 'lucide-react';
 import { StorageProvider, CalendarConnection } from '../types';
 import { CryptoService } from '../services/cryptoService';
+import { AppIcon } from './AppIcon';
+import type { IconName } from '../icons';
 
 interface CalendarEvent {
   id: string;
@@ -17,9 +18,10 @@ interface CalendarIntegrationProps {
   pin: string;
   storageProvider: StorageProvider;
   showStatus: (msg: string, type: 'success' | 'error' | 'info') => void;
+  isDarkMode: boolean;
 }
 
-export const CalendarIntegration: React.FC<CalendarIntegrationProps> = ({ pin, storageProvider, showStatus }) => {
+export const CalendarIntegration: React.FC<CalendarIntegrationProps> = ({ pin, storageProvider, showStatus, isDarkMode }) => {
   const [events, setEvents] = useState<CalendarEvent[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [connectedProviders, setConnectedProviders] = useState<string[]>([]);
@@ -143,11 +145,11 @@ export const CalendarIntegration: React.FC<CalendarIntegrationProps> = ({ pin, s
     showStatus('Calendar disconnected', 'info');
   };
 
-  const providers = [
-    { id: 'google', name: 'Google Calendar', icon: <Calendar className="w-5 h-5 text-blue-500" /> },
-    { id: 'microsoft', name: 'Outlook Calendar', icon: <Calendar className="w-5 h-5 text-blue-600" /> },
-    { id: 'notion', name: 'Notion', icon: <Calendar className="w-5 h-5 text-black" /> },
-    { id: 'apple', name: 'Apple Calendar', icon: <Calendar className="w-5 h-5 text-gray-500" /> },
+  const providers: { id: string; name: string; icon: IconName }[] = [
+    { id: 'google', name: 'Google Calendar', icon: 'google' },
+    { id: 'microsoft', name: 'Outlook Calendar', icon: 'microsoft' },
+    { id: 'notion', name: 'Notion', icon: 'notion' },
+    { id: 'apple', name: 'Apple Calendar', icon: 'apple' },
   ];
 
   return (
@@ -232,7 +234,7 @@ export const CalendarIntegration: React.FC<CalendarIntegrationProps> = ({ pin, s
           return (
             <div key={p.id} className="card p-4 flex flex-col items-center justify-between gap-4 relative">
               <div className="flex items-center gap-3">
-                {p.icon}
+                <AppIcon name={p.icon} size={20} isDarkMode={isDarkMode} />
                 <span className="font-medium">{p.name}</span>
               </div>
               {conn ? (

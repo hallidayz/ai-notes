@@ -1,8 +1,8 @@
 
 import React from 'react';
-import { X } from 'lucide-react';
-import { StorageProvider } from '../types';
+import { StorageProvider, StorageType } from '../types';
 import { LocalModels } from './LocalModels';
+import { AppIcon } from './AppIcon';
 
 interface SettingsProps {
     isOpen: boolean;
@@ -10,7 +10,10 @@ interface SettingsProps {
     industry: string;
     onIndustryChange: (industry: string) => void;
     storageProvider: StorageProvider;
+    storageType: StorageType;
+    onStorageTypeChange: (type: StorageType) => void;
     showStatus: (msg: string, type: 'success' | 'error' | 'info') => void;
+    isDarkMode: boolean;
 }
 
 export const Settings: React.FC<SettingsProps> = ({
@@ -19,7 +22,10 @@ export const Settings: React.FC<SettingsProps> = ({
     industry,
     onIndustryChange,
     storageProvider,
+    storageType,
+    onStorageTypeChange,
     showStatus,
+    isDarkMode,
 }) => {
     if (!isOpen) return null;
 
@@ -27,7 +33,7 @@ export const Settings: React.FC<SettingsProps> = ({
         <div className="modal active" onClick={onClose}>
             <div className="modal-content settings-modal" onClick={e => e.stopPropagation()}>
                 <button className="close-btn" onClick={onClose} aria-label="Close settings">
-                    <X size={18} />
+                    <AppIcon name="close" size={16} isDarkMode={isDarkMode} />
                 </button>
 
                 <h2>Settings</h2>
@@ -54,6 +60,33 @@ export const Settings: React.FC<SettingsProps> = ({
                 </section>
 
                 <section className="settings-section">
+                    <h3>Storage Location</h3>
+                    <p className="settings-section-desc">
+                        Choose where your encrypted sessions and tasks are stored.
+                    </p>
+                    <div className="settings-storage-options">
+                        <div
+                            className={`storage-option ${storageType === StorageType.BROWSER ? 'active' : ''}`}
+                            onClick={() => onStorageTypeChange(StorageType.BROWSER)}
+                        >
+                            <div className="storage-option-info">
+                                <span className="storage-option-title">Browser (IndexedDB)</span>
+                                <span className="storage-option-desc">Fastest, fully offline, data stays in this browser.</span>
+                            </div>
+                        </div>
+                        <div
+                            className={`storage-option ${storageType === StorageType.SERVER ? 'active' : ''}`}
+                            onClick={() => onStorageTypeChange(StorageType.SERVER)}
+                        >
+                            <div className="storage-option-info">
+                                <span className="storage-option-title">Server (Cloud)</span>
+                                <span className="storage-option-desc">Sync across devices, data stored on our secure server.</span>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <section className="settings-section">
                     <h3>Local Models</h3>
                     <p className="settings-section-desc">
                         Choose and download on-device models for transcription and analysis.
@@ -63,6 +96,7 @@ export const Settings: React.FC<SettingsProps> = ({
                             storageProvider={storageProvider}
                             showStatus={showStatus}
                             embedded
+                            isDarkMode={isDarkMode}
                         />
                     </div>
                 </section>

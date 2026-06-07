@@ -5,10 +5,10 @@ import session from "express-session";
 import cookieParser from "cookie-parser";
 import crypto from "crypto";
 import { CalendarBackend } from "./server/calendar";
+import { HOST, PORT, getServerUrls } from "./server/config";
 
 async function startServer() {
   const app = express();
-  const PORT = 3000;
 
   app.use(express.json({ limit: '50mb' }));
   app.use(cookieParser());
@@ -16,7 +16,11 @@ async function startServer() {
     secret: process.env.SESSION_SECRET || crypto.randomBytes(32).toString('hex'),
     resave: false,
     saveUninitialized: true,
-    cookie: { secure: true, sameSite: 'none', httpOnly: true }
+    cookie: {
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
+      httpOnly: true,
+    }
   }));
 
   // Storage directory for "Server" storage option
@@ -244,7 +248,7 @@ async function startServer() {
   if (process.env.NODE_ENV !== "production") {
     const { createServer: createViteServer } = await import("vite");
     const vite = await createViteServer({
-      server: { middlewareMode: true },
+      server: { middlewareMode: true, host: HOST, port: PORT, strictPort: true },
       appType: "spa",
     });
     app.use(vite.middlewares);
@@ -256,8 +260,13 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, "0.0.0.0", () => {
-    console.log(`Server running on http://localhost:${PORT}`);
+  app.listen(PORT, HOST, () => {
+    const { local, network } = getServerUrls();
+    console.log(`Acaiguardian server listening on ${HOST}:${PORT}`);
+    console.log(`  App (local):   ${local}`);
+    for (const url of network) {
+      console.log(`  App (network): ${url}`);
+    }
   });
 }
 

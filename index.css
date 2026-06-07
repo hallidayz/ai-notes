@@ -89,6 +89,57 @@ h1 {
     color: var(--accent-color);
 }
 
+.brand-lockup {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 14px;
+    margin-bottom: 8px;
+}
+
+.brand-lockup-centered {
+    flex-direction: column;
+    text-align: center;
+    margin-bottom: 24px;
+}
+
+.brand-lockup h1 {
+    margin-bottom: 4px;
+}
+
+.brand-lockup p {
+    margin: 0;
+    color: var(--text-secondary);
+}
+
+.brand-logo {
+    flex-shrink: 0;
+    border-radius: 12px;
+}
+
+.app-icon {
+    display: inline-block;
+    vertical-align: middle;
+    object-fit: contain;
+    user-select: none;
+}
+
+.app-icon-spin {
+    animation: spin 1s linear infinite;
+}
+
+.section-heading-icon {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.inline-icon-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+
 h2, h3 {
     color: var(--text-secondary);
 }
@@ -1342,6 +1393,22 @@ button {
     border-radius: 8px;
     overflow: hidden;
     background: var(--card-bg);
+}
+
+.settings-storage-options {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+@media (min-width: 560px) {
+    .settings-storage-options {
+        flex-direction: row;
+    }
+
+    .settings-storage-options .storage-option {
+        flex: 1;
+    }
 }
 
 .settings-coming-soon {

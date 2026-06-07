@@ -2,6 +2,7 @@
 import { pipeline, env, AutomaticSpeechRecognitionPipeline, Text2TextGenerationPipeline } from '@xenova/transformers';
 import { GoogleGenAI, Type } from "@google/genai";
 import { TranscriptChunk, ModelConfig } from '../types';
+import { getGeminiApiKey } from '../utils/env';
 
 export class OnDeviceAIService {
     private static instance: OnDeviceAIService | null = null;
@@ -104,7 +105,7 @@ export class OnDeviceAIService {
             return { transcript: [], summary: '', action_items: [], outline: '' };
         }
 
-        const apiKey = process.env.GEMINI_API_KEY;
+        const apiKey = getGeminiApiKey();
         if (apiKey) {
             progressCallback('Performing advanced analysis & diarization with Gemini...');
             try {

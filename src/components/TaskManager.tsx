@@ -12,6 +12,7 @@ interface TaskManagerProps {
     storageProvider: StorageProvider;
     industry: string;
     onUpdateSession: (session: Session) => Promise<void>;
+    isDarkMode: boolean;
 }
 
 export const TaskManager: React.FC<TaskManagerProps> = ({ 
@@ -22,7 +23,8 @@ export const TaskManager: React.FC<TaskManagerProps> = ({
     sessions,
     storageProvider,
     industry,
-    onUpdateSession
+    onUpdateSession,
+    isDarkMode,
 }) => {
     const [newTaskTitle, setNewTaskTitle] = useState('');
     const [newTaskPriority, setNewTaskPriority] = useState<Task['priority']>('medium');
@@ -229,7 +231,7 @@ export const TaskManager: React.FC<TaskManagerProps> = ({
                     <div className="empty-state">No tasks yet. Add one above or promote an action item from a session!</div>
                 ) : (
                     sortedTasks.map(task => (
-                        <TaskItem key={task.id} task={task} onUpdate={onUpdateTask} onDelete={onDeleteTask} />
+                        <TaskItem key={task.id} task={task} onUpdate={onUpdateTask} onDelete={onDeleteTask} isDarkMode={isDarkMode} />
                     ))
                 )}
             </div>

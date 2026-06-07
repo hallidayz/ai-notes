@@ -1,14 +1,16 @@
 
 import React from 'react';
 import { Session } from '../types';
+import { AppIcon } from './AppIcon';
 
 interface SessionsListProps {
     sessions: Session[];
     onSelect: (session: Session) => void;
     onDelete: (id: number) => void;
+    isDarkMode: boolean;
 }
 
-export const SessionsList: React.FC<SessionsListProps> = ({ sessions, onSelect, onDelete }) => {
+export const SessionsList: React.FC<SessionsListProps> = ({ sessions, onSelect, onDelete, isDarkMode }) => {
     
     if (sessions.length === 0) {
         return <div className="empty-state">No sessions yet. Create one to get started!</div>;
@@ -37,7 +39,12 @@ export const SessionsList: React.FC<SessionsListProps> = ({ sessions, onSelect, 
                         {session.analysisStatus && session.analysisStatus !== 'complete' && session.analysisStatus !== 'none' && (
                             <div className={`session-status-indicator ${session.analysisStatus}`}>
                                 {session.analysisStatus === 'pending' && <><div className="spinner-small"></div> Processing AI analysis...</>}
-                                {session.analysisStatus === 'failed' && <>&#x26A0; AI analysis failed</>}
+                                {session.analysisStatus === 'failed' && (
+                                    <span className="inline-icon-label">
+                                        <AppIcon name="warning" size={14} isDarkMode={isDarkMode} />
+                                        AI analysis failed
+                                    </span>
+                                )}
                             </div>
                         )}
                     </div>
@@ -47,7 +54,7 @@ export const SessionsList: React.FC<SessionsListProps> = ({ sessions, onSelect, 
                             onClick={(e) => { e.stopPropagation(); onDelete(session.id!); }}
                             aria-label="Delete session"
                         >
-                           &#x1F5D1;
+                            <AppIcon name="delete" size={18} isDarkMode={isDarkMode} />
                         </button>
                     </div>
                 </div>

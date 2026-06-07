@@ -4,6 +4,7 @@ import { Session, Task, TodoItem, StorageProvider, TranscriptChunk } from '../ty
 import { CryptoService } from '../services/cryptoService';
 import { onDeviceAIService } from '../services/onDeviceAIService';
 import { AudioPlayer } from './AudioPlayer';
+import { AppIcon } from './AppIcon';
 
 interface SessionDetailModalProps {
     session: Session;
@@ -15,10 +16,11 @@ interface SessionDetailModalProps {
     industry: string;
     storageProvider: StorageProvider;
     showStatus: (msg: string, type: 'success' | 'error' | 'info') => void;
+    isDarkMode: boolean;
 }
 
 export const SessionDetailModal: React.FC<SessionDetailModalProps> = ({ 
-    session, onClose, onDelete, onUpdate, onAddTask, pin, industry, storageProvider, showStatus 
+    session, onClose, onDelete, onUpdate, onAddTask, pin, industry, storageProvider, showStatus, isDarkMode
 }) => {
     const [decryptedNotes, setDecryptedNotes] = useState('');
     const [isDecrypting, setIsDecrypting] = useState(true);
@@ -309,7 +311,9 @@ export const SessionDetailModal: React.FC<SessionDetailModalProps> = ({
     return (
         <div className="modal active" onClick={onClose}>
             <div className="modal-content" onClick={e => e.stopPropagation()}>
-                <button className="close-btn" onClick={onClose}>&times;</button>
+                <button className="close-btn" onClick={onClose} aria-label="Close">
+                    <AppIcon name="close" size={16} isDarkMode={isDarkMode} />
+                </button>
                 <h2>{session.sessionTitle}</h2>
                 <p style={{ color: '#94a3b8', marginBottom: '16px' }}>{new Date(session.date).toLocaleDateString()}{decryptedParticipants && ` with ${decryptedParticipants}`}</p>
                 
@@ -318,7 +322,7 @@ export const SessionDetailModal: React.FC<SessionDetailModalProps> = ({
                 {session.analysisStatus === 'none' && aiAnalysisStatus !== 'in_progress' && (
                     <div className="action-buttons" style={{ justifyContent: 'center', margin: '20px 0'}}>
                         <button className="btn-ai" onClick={handleRunOnDeviceAnalysis}>
-                            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16"><path d="M5 2.5a.5.5 0 0 1 .5-.5h5a.5.5 0 0 1 0 1h-5a.5.5 0 0 1-.5-.5zm0 2a.5.5 0 0 1 .5-.5h5a.5.5 0 0 1 0 1h-5a.5.5 0 0 1-.5-.5zm0 2a.5.5 0 0 1 .5-.5h5a.5.5 0 0 1 0 1h-5a.5.5 0 0 1-.5-.5zm0 2a.5.5 0 0 1 .5-.5h5a.5.5 0 0 1 0 1h-5a.5.5 0 0 1-.5-.5zm0 2a.5.5 0 0 1 .5-.5h5a.5.5 0 0 1 0 1h-5a.5.5 0 0 1-.5-.5z"/><path d="M2 1a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V3a2 2 0 0 0-2-2H2zm12 1a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H2a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1h12z"/></svg>
+                            <AppIcon name="ai-chip" size={16} isDarkMode={isDarkMode} />
                             Run On-Device Analysis
                         </button>
                     </div>
@@ -350,12 +354,12 @@ export const SessionDetailModal: React.FC<SessionDetailModalProps> = ({
                 {session.analysisStatus === 'complete' && (
                     <div className="analysis-section">
                         <div className="analysis-subsection">
-                            <h4>&#x1F4DD; Summary</h4>
+                            <h4 className="section-heading-icon"><AppIcon name="summary" size={16} isDarkMode={isDarkMode} /> Summary</h4>
                             <p>{decryptedSummary}</p>
                         </div>
                          {decryptedTodoItems && decryptedTodoItems.length > 0 && (
                             <div className="analysis-subsection">
-                                <h4>&#x2705; Action Items</h4>
+                                <h4 className="section-heading-icon"><AppIcon name="action-items" size={16} isDarkMode={isDarkMode} /> Action Items</h4>
                                 <ul className="action-items-list">
                                     {decryptedTodoItems.map((todo, index) => (
                                         <li key={index} className={`todo-item ${todo.completed ? 'completed' : ''}`}>
@@ -371,7 +375,7 @@ export const SessionDetailModal: React.FC<SessionDetailModalProps> = ({
                                                     title="Promote to Task" 
                                                     data-index={index}
                                                     onClick={onPromoteClick}>
-                                                    &#x2795;
+                                                    <AppIcon name="plus" size={14} isDarkMode={isDarkMode} />
                                                 </button>
                                             )}
                                         </li>
@@ -381,7 +385,7 @@ export const SessionDetailModal: React.FC<SessionDetailModalProps> = ({
                         )}
                         {decryptedOutline && (
                              <div className="analysis-subsection">
-                                <h4>&#x1F4D1; Outline</h4>
+                                <h4 className="section-heading-icon"><AppIcon name="outline" size={16} isDarkMode={isDarkMode} /> Outline</h4>
                                 <div className="outline-content">{decryptedOutline}</div>
                             </div>
                         )}

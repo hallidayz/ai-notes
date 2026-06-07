@@ -1,13 +1,15 @@
 
 import React, { useState, useRef } from 'react';
 import { Session } from '../types';
+import { AppIcon } from './AppIcon';
 
 interface NewSessionFormProps {
     onAddSession: (session: Omit<Session, 'id' | 'timestamp' | 'notes'>, notes: string, audioBlob: Blob | null) => Promise<boolean>;
     showStatus: (message: string, type: 'success' | 'error' | 'info', duration?: number) => void;
+    isDarkMode: boolean;
 }
 
-export const NewSessionForm: React.FC<NewSessionFormProps> = ({ onAddSession, showStatus }) => {
+export const NewSessionForm: React.FC<NewSessionFormProps> = ({ onAddSession, showStatus, isDarkMode }) => {
     const [sessionTitle, setSessionTitle] = useState('');
     const [participants, setParticipants] = useState('');
     const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
@@ -141,12 +143,12 @@ export const NewSessionForm: React.FC<NewSessionFormProps> = ({ onAddSession, sh
                 <div className="recording-controls">
                     {!isRecording ? (
                         <button type="button" className="btn-record" onClick={handleStartRecording}>
-                            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16"><path d="M8 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8zm0 1A5 5 0 1 1 8 3a5 5 0 0 1 0 10z"/><path d="M10 8a2 2 0 1 1-4 0 2 2 0 0 1 4 0z"/></svg>
+                            <AppIcon name="record" size={16} isDarkMode={isDarkMode} />
                             Record
                         </button>
                     ) : (
                         <button type="button" className="btn-record recording" onClick={handleStopRecording}>
-                            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16"><path d="M5.5 5.5A.5.5 0 0 1 6 6v4a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5zm4 0a.5.5 0 0 1 .5.5v4a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5z"/><path d="M0 2a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H2a2 2 0 0 1-2-2V2zm15 0a1 1 0 0 0-1-1H2a1 1 0 0 0-1 1v12a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V2z"/></svg>
+                            <AppIcon name="stop" size={16} isDarkMode={isDarkMode} />
                             Stop ({formatTime(duration)})
                         </button>
                     )}
