@@ -44,7 +44,7 @@ export const App: React.FC = () => {
     return <MainApp pin={pin} isDarkMode={isDarkMode} onToggleTheme={handleToggleTheme} />;
 };
 
-const MainApp: React.FC<{ pin: string, isDarkMode: boolean, onToggleTheme: () => void }> = ({ pin, isDarkMode, onToggleTheme }) => {
+export const MainApp: React.FC<{ pin: string, isDarkMode: boolean, onToggleTheme: () => void }> = ({ pin, isDarkMode, onToggleTheme }) => {
     const [sessions, setSessions] = useState<Session[]>([]);
     const [tasks, setTasks] = useState<Task[]>([]);
     const [selectedSession, setSelectedSession] = useState<Session | null>(null);
