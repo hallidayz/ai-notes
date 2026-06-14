@@ -3,8 +3,13 @@ import assert from 'node:assert';
 import { OnDeviceAIService } from './onDeviceAIService.ts';
 
 test('OnDeviceAIService analyze should fallback to on-device models when GEMINI_API_KEY is not present', async (t) => {
+    (globalThis as any).import = { meta: { env: {} } };
     const originalEnv = process.env.GEMINI_API_KEY;
     delete process.env.GEMINI_API_KEY;
+    // mock import.meta.env
+    const oldImportMetaEnv = (globalThis as any).import?.meta?.env;
+    if (!(globalThis as any).import) (globalThis as any).import = { meta: { env: {} } };
+    else if (!(globalThis as any).import.meta.env) (globalThis as any).import.meta.env = {};
 
     const originalWindow = global.window;
     const originalBlob = global.Blob;
