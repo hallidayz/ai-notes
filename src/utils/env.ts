@@ -4,7 +4,7 @@ export function getGeminiApiKey(): string | undefined {
         return process.env.GEMINI_API_KEY;
     }
 
-    const viteKey = import.meta.env.VITE_GEMINI_API_KEY;
+    const viteKey = (typeof import.meta !== 'undefined' && import.meta.env) ? import.meta.env.VITE_GEMINI_API_KEY : undefined;
     if (typeof viteKey === 'string' && viteKey.length > 0) {
         return viteKey;
     }
