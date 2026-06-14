@@ -6,6 +6,7 @@ import { TaskItem } from './TaskItem';
 interface TaskManagerProps {
     tasks: Task[];
     onAddTask: (task: Omit<Task, 'id' | 'timestamp'>) => Promise<boolean>;
+    onAddTasks: (tasks: Omit<Task, 'id' | 'timestamp'>[]) => Promise<boolean>;
     onUpdateTask: (task: Task) => void;
     onDeleteTask: (id: number) => void;
     sessions: Session[];
@@ -18,6 +19,7 @@ interface TaskManagerProps {
 export const TaskManager: React.FC<TaskManagerProps> = ({ 
     tasks, 
     onAddTask, 
+    onAddTasks,
     onUpdateTask, 
     onDeleteTask, 
     sessions,
@@ -100,20 +102,18 @@ export const TaskManager: React.FC<TaskManagerProps> = ({
             };
             await onUpdateSession(updatedSession);
 
-            // Create tasks from action items concurrently
-            const addPromises = results.action_items.map((item: string) =>
-                onAddTask({
-                    title: item,
-                    priority: 'medium',
-                    dueDate: null,
-                    status: 'todo',
-                    sessionId: session.id,
-                    sessionName: session.sessionTitle
-                })
-            );
+            // Create tasks from action items using the bulk operation
+            const newTasks = (results.action_items || []).map((item: string) => ({
+                title: item,
+                priority: 'medium' as const,
+                dueDate: null,
+                status: 'todo' as const,
+                sessionId: session.id,
+                sessionName: session.sessionTitle
+            }));
 
-            const addResults = await Promise.all(addPromises);
-            const addedCount = addResults.filter(success => success).length;
+            const success = await onAddTasks(newTasks);
+            const addedCount = success ? newTasks.length : 0;
 
             setSuccessMessage(`Successfully generated ${addedCount} tasks from session "${session.sessionTitle}"!`);
             setAnalysisSessionId(undefined);
