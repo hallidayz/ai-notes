@@ -5,7 +5,6 @@
  * TODO: Integrate speaker verification model (speechbrain/spkrec-ecapa-voxceleb)
  * TODO: Extract voice embeddings from audio segments
  * TODO: Store speaker profiles in IndexedDB
- * TODO: Match new audio to known speakers
  */
 
 export interface SpeakerProfile {
@@ -96,6 +95,17 @@ export class SpeakerDiarizationService {
             console.error('Error extracting embedding:', error);
             return null;
         }
+    }
+
+    /**
+     * Process new audio segment, extract embedding, and match to known speakers
+     */
+    async identifySpeakerFromAudio(audioBuffer: AudioBuffer, startTime: number, endTime: number): Promise<{ speakerId: string; confidence: number } | null> {
+        const embedding = await this.extractEmbedding(audioBuffer, startTime, endTime);
+        if (!embedding) {
+            return null;
+        }
+        return this.matchSpeaker(embedding);
     }
 
     /**
