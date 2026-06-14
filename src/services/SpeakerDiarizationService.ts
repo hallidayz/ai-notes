@@ -1,11 +1,6 @@
 /**
  * Speaker Diarization Service
  * Handles voice-based speaker identification using embeddings
- *
- * TODO: Integrate speaker verification model (speechbrain/spkrec-ecapa-voxceleb)
- * TODO: Extract voice embeddings from audio segments
- * TODO: Store speaker profiles in IndexedDB
- * TODO: Match new audio to known speakers
  */
 
 export interface SpeakerProfile {
@@ -45,7 +40,6 @@ export class SpeakerDiarizationService {
 
     /**
      * Initialize speaker verification model
-     * TODO: Load speechbrain/spkrec-ecapa-voxceleb model
      */
     async initialize(): Promise<void> {
         try {
@@ -73,7 +67,6 @@ export class SpeakerDiarizationService {
 
     /**
      * Extract voice embedding from audio segment
-     * TODO: Implement using speaker verification model
      */
     async extractEmbedding(audioBuffer: AudioBuffer, startTime: number, endTime: number): Promise<Float32Array | null> {
         if (!this.speakerModel) {
