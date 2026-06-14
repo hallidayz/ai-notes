@@ -4,9 +4,14 @@ export function getGeminiApiKey(): string | undefined {
         return process.env.GEMINI_API_KEY;
     }
 
-    const viteKey = import.meta.env.VITE_GEMINI_API_KEY;
-    if (typeof viteKey === 'string' && viteKey.length > 0) {
-        return viteKey;
+    try {
+        // @ts-expect-error import.meta.env may not be defined in Node
+        const viteKey = import.meta.env?.VITE_GEMINI_API_KEY;
+        if (typeof viteKey === 'string' && viteKey.length > 0) {
+            return viteKey;
+        }
+    } catch {
+        // import.meta.env might not be defined in Node
     }
 
     return undefined;
