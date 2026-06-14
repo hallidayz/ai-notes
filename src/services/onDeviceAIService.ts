@@ -1,8 +1,6 @@
 
 import { pipeline, env, AutomaticSpeechRecognitionPipeline, Text2TextGenerationPipeline } from '@xenova/transformers';
-import { GoogleGenAI, Type } from "@google/genai";
 import { TranscriptChunk, ModelConfig } from '../types';
-import { getGeminiApiKey } from '../utils/env';
 
 export class OnDeviceAIService {
     private static instance: OnDeviceAIService | null = null;
@@ -105,61 +103,32 @@ export class OnDeviceAIService {
             return { transcript: [], summary: '', action_items: [], outline: '' };
         }
 
-        const apiKey = getGeminiApiKey();
-        if (apiKey) {
-            progressCallback('Performing advanced analysis & diarization with Gemini...');
-            try {
-                const ai = new GoogleGenAI({ apiKey });
-                const response = await ai.models.generateContent({
-                    model: "gemini-3-flash-preview",
-                    contents: `
-                        Analyze this ${industry} transcript. 
-                        1. Perform speaker diarization: Identify different speakers and attribute each part of the text to them.
-                        2. Summarize the session.
-                        3. Extract action items.
-                        4. Create a structured outline.
+        try {
+            const statusRes = await fetch('/api/ai/status');
+            const { hasApiKey } = await statusRes.json();
 
-                        Transcript:
-                        ${rawTranscript}
-                    `,
-                    config: {
-                        responseMimeType: "application/json",
-                        responseSchema: {
-                            type: Type.OBJECT,
-                            properties: {
-                                transcript: {
-                                    type: Type.ARRAY,
-                                    items: {
-                                        type: Type.OBJECT,
-                                        properties: {
-                                            speaker: { type: Type.STRING, description: "Name or label of the speaker (e.g., 'Speaker A', 'Dr. Smith')" },
-                                            text: { type: Type.STRING }
-                                        },
-                                        required: ["speaker", "text"]
-                                    }
-                                },
-                                summary: { type: Type.STRING },
-                                action_items: {
-                                    type: Type.ARRAY,
-                                    items: { type: Type.STRING }
-                                },
-                                outline: { type: Type.STRING }
-                            },
-                            required: ["transcript", "summary", "action_items", "outline"]
-                        }
-                    }
+            if (hasApiKey) {
+                progressCallback('Performing advanced analysis & diarization with Gemini...');
+                const response = await fetch('/api/ai/generate', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ industry, rawTranscript })
                 });
 
-                const result = JSON.parse(response.text || '{}');
-                return {
-                    transcript: result.transcript || [],
-                    summary: result.summary || 'No summary generated.',
-                    action_items: result.action_items || [],
-                    outline: result.outline || 'No outline generated.'
-                };
-            } catch (err) {
-                console.error("Gemini analysis failed, falling back to on-device models:", err);
+                if (response.ok) {
+                    const result = await response.json();
+                    return {
+                        transcript: result.transcript || [],
+                        summary: result.summary || 'No summary generated.',
+                        action_items: result.action_items || [],
+                        outline: result.outline || 'No outline generated.'
+                    };
+                } else {
+                    console.error("Gemini analysis failed, falling back to on-device models. Status:", response.status);
+                }
             }
+        } catch (err) {
+            console.error("Gemini analysis connection failed, falling back to on-device models:", err);
         }
 
         // Fallback to on-device models if Gemini fails or no API key
