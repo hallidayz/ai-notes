@@ -3,11 +3,18 @@ import assert from 'node:assert';
 import { OnDeviceAIService } from './onDeviceAIService.ts';
 
 test('OnDeviceAIService analyze should fallback to on-device models when GEMINI_API_KEY is not present', async (t) => {
-    const originalEnv = process.env.GEMINI_API_KEY;
-    delete process.env.GEMINI_API_KEY;
-
     const originalWindow = global.window;
     const originalBlob = global.Blob;
+    const originalFetch = global.fetch;
+
+    global.fetch = async (url: string) => {
+        if (url === '/api/ai/status') {
+            return {
+                json: async () => ({ hasApiKey: false })
+            } as Response;
+        }
+        return { ok: false } as Response;
+    };
 
     global.window = {
         AudioContext: class {
@@ -72,17 +79,12 @@ test('OnDeviceAIService analyze should fallback to on-device models when GEMINI_
     ]);
 
     // Restore global state
-    if (originalEnv !== undefined) {
-        process.env.GEMINI_API_KEY = originalEnv;
-    }
     global.window = originalWindow;
     global.Blob = originalBlob;
+    global.fetch = originalFetch;
 });
 
 test('OnDeviceAIService analyze should fallback to on-device models when Gemini API fails', async (t) => {
-    const originalEnv = process.env.GEMINI_API_KEY;
-    process.env.GEMINI_API_KEY = 'mock_key';
-
     const originalWindow = global.window;
     const originalBlob = global.Blob;
     const originalFetch = global.fetch;
@@ -104,7 +106,12 @@ test('OnDeviceAIService analyze should fallback to on-device models when Gemini 
     } as any;
 
     // Mock fetch to simulate Gemini API failure
-    global.fetch = async () => {
+    global.fetch = async (url: string | URL | Request) => {
+        if (url === '/api/ai/status') {
+            return {
+                json: async () => ({ hasApiKey: true })
+            } as Response;
+        }
         throw new Error('Network Error');
     };
 
@@ -158,11 +165,6 @@ test('OnDeviceAIService analyze should fallback to on-device models when Gemini 
     ]);
 
     // Restore global state
-    if (originalEnv !== undefined) {
-        process.env.GEMINI_API_KEY = originalEnv;
-    } else {
-        delete process.env.GEMINI_API_KEY;
-    }
     console.error = originalConsoleError;
     global.window = originalWindow;
     global.Blob = originalBlob;

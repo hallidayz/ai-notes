@@ -2,6 +2,7 @@ import "./server/loadEnv.js";
 import express from "express";
 import path from "path";
 import fs from "fs/promises";
+import { GoogleGenAI, Type } from "@google/genai";
 import { HOST, PORT, getServerUrls } from "./server/config";
 
 async function startServer() {
@@ -78,6 +79,72 @@ async function startServer() {
       res.json({ success: true });
     } catch {
       res.status(500).json({ error: "Failed to delete from storage" });
+    }
+  });
+
+  app.get("/api/ai/status", (req, res) => {
+    res.json({ hasApiKey: !!process.env.GEMINI_API_KEY });
+  });
+
+  app.post("/api/ai/generate", async (req, res) => {
+    try {
+      const { industry, rawTranscript } = req.body;
+      const apiKey = process.env.GEMINI_API_KEY;
+      if (!apiKey) {
+        return res.status(503).json({ error: "Gemini API key not configured" });
+      }
+
+      const ai = new GoogleGenAI({ apiKey });
+      const response = await ai.models.generateContent({
+        model: "gemini-3-flash-preview",
+        contents: `
+            Analyze this ${industry} transcript.
+            1. Perform speaker diarization: Identify different speakers and attribute each part of the text to them.
+            2. Summarize the session.
+            3. Extract action items.
+            4. Create a structured outline.
+
+            Transcript:
+            ${rawTranscript}
+        `,
+        config: {
+          responseMimeType: "application/json",
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              transcript: {
+                type: Type.ARRAY,
+                items: {
+                  type: Type.OBJECT,
+                  properties: {
+                    speaker: { type: Type.STRING, description: "Name or label of the speaker (e.g., 'Speaker A', 'Dr. Smith')" },
+                    text: { type: Type.STRING }
+                  },
+                  required: ["speaker", "text"]
+                }
+              },
+              summary: { type: Type.STRING },
+              action_items: {
+                type: Type.ARRAY,
+                items: { type: Type.STRING }
+              },
+              outline: { type: Type.STRING }
+            },
+            required: ["transcript", "summary", "action_items", "outline"]
+          }
+        }
+      });
+
+      const result = JSON.parse(response.text || '{}');
+      res.json({
+        transcript: result.transcript || [],
+        summary: result.summary || 'No summary generated.',
+        action_items: result.action_items || [],
+        outline: result.outline || 'No outline generated.'
+      });
+    } catch (err) {
+      console.error("Gemini API error:", err);
+      res.status(500).json({ error: "Failed to generate content" });
     }
   });
 
