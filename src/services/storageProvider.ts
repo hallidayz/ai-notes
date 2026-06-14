@@ -124,9 +124,11 @@ export class ServerStorageProvider implements StorageProvider {
     async getAllTasks() {
         const { CryptoService } = await import('./cryptoService');
         try {
-            const res = await fetch('/api/storage/list');
-            const files = await res.json();
-            const tasksFile = files.find((f: { id: string, data: { encrypted?: string } }) => f.id === 'tasks_list');
+            const res = await fetch('/api/storage/item/tasks_list');
+            if (!res.ok) {
+                return [];
+            }
+            const tasksFile = await res.json();
             if (tasksFile?.data?.encrypted) {
                 const decrypted = await CryptoService.decrypt(tasksFile.data.encrypted, this.pin);
                 return JSON.parse(decrypted);
