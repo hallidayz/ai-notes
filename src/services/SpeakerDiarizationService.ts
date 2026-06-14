@@ -4,7 +4,6 @@
  *
  * TODO: Integrate speaker verification model (speechbrain/spkrec-ecapa-voxceleb)
  * TODO: Extract voice embeddings from audio segments
- * TODO: Store speaker profiles in IndexedDB
  * TODO: Match new audio to known speakers
  */
 
@@ -209,20 +208,33 @@ export class SpeakerDiarizationService {
     }
 
     /**
-     * Load speaker profiles from IndexedDB
+     * Get IndexedDB Database connection
      */
-    private async loadSpeakerProfiles(): Promise<void> {
+    private async getDB(): Promise<IDBDatabase> {
         return new Promise((resolve, reject) => {
             const request = indexedDB.open(this.DB_NAME, 1);
 
             request.onerror = () => reject(request.error);
-            request.onsuccess = () => {
-                const db = request.result;
-                if (!db.objectStoreNames.contains(this.STORE_NAME)) {
-                    resolve();
-                    return;
-                }
+            request.onsuccess = () => resolve(request.result);
 
+            request.onupgradeneeded = (event) => {
+                const db = (event.target as IDBOpenDBRequest).result;
+                if (!db.objectStoreNames.contains(this.STORE_NAME)) {
+                    const objectStore = db.createObjectStore(this.STORE_NAME, { keyPath: 'id' });
+                    objectStore.createIndex('name', 'name', { unique: false });
+                    objectStore.createIndex('lastSeen', 'lastSeen', { unique: false });
+                }
+            };
+        });
+    }
+
+    /**
+     * Load speaker profiles from IndexedDB
+     */
+    private async loadSpeakerProfiles(): Promise<void> {
+        try {
+            const db = await this.getDB();
+            return new Promise((resolve, reject) => {
                 const transaction = db.transaction([this.STORE_NAME], 'readonly');
                 const store = transaction.objectStore(this.STORE_NAME);
                 const getAllRequest = store.getAll();
@@ -240,66 +252,19 @@ export class SpeakerDiarizationService {
                 };
 
                 getAllRequest.onerror = () => reject(getAllRequest.error);
-            };
-
-            request.onupgradeneeded = (event) => {
-                const db = (event.target as IDBOpenDBRequest).result;
-                if (!db.objectStoreNames.contains(this.STORE_NAME)) {
-                    const objectStore = db.createObjectStore(this.STORE_NAME, { keyPath: 'id' });
-                    objectStore.createIndex('name', 'name', { unique: false });
-                    objectStore.createIndex('lastSeen', 'lastSeen', { unique: false });
-                }
-            };
-        });
+            });
+        } catch (error) {
+            console.error('Error loading speaker profiles:', error);
+        }
     }
 
     /**
      * Save speaker profile to IndexedDB
      */
     private async saveToIndexedDB(profile: SpeakerProfile): Promise<void> {
-        return new Promise((resolve, reject) => {
-            // First, ensure the database and store exist
-            const ensureStoreExists = (): Promise<IDBDatabase> => {
-                return new Promise((resolveStore, rejectStore) => {
-                    const checkRequest = indexedDB.open(this.DB_NAME, 1);
-
-                    checkRequest.onerror = () => rejectStore(checkRequest.error);
-
-                    checkRequest.onupgradeneeded = (event) => {
-                        const db = (event.target as IDBOpenDBRequest).result;
-                        if (!db.objectStoreNames.contains(this.STORE_NAME)) {
-                            const objectStore = db.createObjectStore(this.STORE_NAME, { keyPath: 'id' });
-                            objectStore.createIndex('name', 'name', { unique: false });
-                            objectStore.createIndex('lastSeen', 'lastSeen', { unique: false });
-                        }
-                    };
-
-                    checkRequest.onsuccess = () => {
-                        const db = checkRequest.result;
-                        // If store doesn't exist, we need to upgrade
-                        if (!db.objectStoreNames.contains(this.STORE_NAME)) {
-                            db.close();
-                            // Reopen with version bump to trigger upgrade
-                            const upgradeRequest = indexedDB.open(this.DB_NAME, 2);
-                            upgradeRequest.onupgradeneeded = (event) => {
-                                const upgradeDb = (event.target as IDBOpenDBRequest).result;
-                                if (!upgradeDb.objectStoreNames.contains(this.STORE_NAME)) {
-                                    const objectStore = upgradeDb.createObjectStore(this.STORE_NAME, { keyPath: 'id' });
-                                    objectStore.createIndex('name', 'name', { unique: false });
-                                    objectStore.createIndex('lastSeen', 'lastSeen', { unique: false });
-                                }
-                            };
-                            upgradeRequest.onsuccess = () => resolveStore(upgradeRequest.result);
-                            upgradeRequest.onerror = () => rejectStore(upgradeRequest.error);
-                        } else {
-                            resolveStore(db);
-                        }
-                    };
-                });
-            };
-
-            ensureStoreExists().then((db) => {
-                // Now we can safely create a transaction since the store exists
+        try {
+            const db = await this.getDB();
+            return new Promise((resolve, reject) => {
                 const transaction = db.transaction([this.STORE_NAME], 'readwrite');
                 const store = transaction.objectStore(this.STORE_NAME);
 
@@ -312,10 +277,10 @@ export class SpeakerDiarizationService {
                 const putRequest = store.put(profileToStore);
                 putRequest.onsuccess = () => resolve();
                 putRequest.onerror = () => reject(putRequest.error);
-            }).catch((error) => {
-                reject(error);
             });
-        });
+        } catch (error) {
+            console.error('Error saving speaker profile:', error);
+        }
     }
 
     /**
@@ -331,17 +296,17 @@ export class SpeakerDiarizationService {
     async deleteSpeakerProfile(speakerId: string): Promise<void> {
         this.speakerProfiles.delete(speakerId);
 
-        return new Promise((resolve, reject) => {
-            const request = indexedDB.open(this.DB_NAME, 1);
-            request.onsuccess = () => {
-                const db = request.result;
+        try {
+            const db = await this.getDB();
+            return new Promise((resolve, reject) => {
                 const transaction = db.transaction([this.STORE_NAME], 'readwrite');
                 const store = transaction.objectStore(this.STORE_NAME);
                 const deleteRequest = store.delete(speakerId);
                 deleteRequest.onsuccess = () => resolve();
                 deleteRequest.onerror = () => reject(deleteRequest.error);
-            };
-            request.onerror = () => reject(request.error);
-        });
+            });
+        } catch (error) {
+            console.error('Error deleting speaker profile:', error);
+        }
     }
 }
