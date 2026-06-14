@@ -47,7 +47,7 @@ export class SpeakerDiarizationService {
             await this.loadSpeakerProfiles();
 
             // Load speaker verification model
-            const transformers = await import('@huggingface/transformers');
+            const transformers = await import('@xenova/transformers');
             const env = transformers.env;
             if (typeof env !== 'undefined') {
                 env.remoteHost = typeof window !== 'undefined' && window.location
@@ -56,7 +56,8 @@ export class SpeakerDiarizationService {
             }
             this.speakerModel = await transformers.pipeline(
                 'feature-extraction',
-                'speechbrain/spkrec-ecapa-voxceleb'
+                'Xenova/wavlm-base-plus-sd',
+                { quantized: true }
             );
 
             console.log('Speaker Diarization Service initialized');
@@ -83,7 +84,8 @@ export class SpeakerDiarizationService {
             const segment = channelData.slice(startSample, endSample);
 
             // Process through speaker verification model
-            const output = await this.speakerModel(segment);
+            const speakerModelFn = this.speakerModel as (segment: Float32Array, options: { pooling: string, normalize: boolean }) => Promise<{ data: ArrayLike<number> }>;
+            const output = await speakerModelFn(segment, { pooling: 'mean', normalize: true });
             return new Float32Array(output.data);
         } catch (error) {
             console.error('Error extracting embedding:', error);
