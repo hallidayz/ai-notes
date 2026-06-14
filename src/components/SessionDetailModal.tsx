@@ -19,6 +19,41 @@ interface SessionDetailModalProps {
     isDarkMode: boolean;
 }
 
+async function decryptStringField(field: string | undefined, pin: string): Promise<string> {
+    if (!field) return '';
+    try {
+        return await CryptoService.decrypt(field, pin);
+    } catch {
+        return field;
+    }
+}
+
+async function decryptTranscriptField(transcript: string | TranscriptChunk[] | undefined, pin: string): Promise<TranscriptChunk[]> {
+    if (!transcript) return [];
+    if (typeof transcript === 'string') {
+        try {
+            const decrypted = await CryptoService.decrypt(transcript, pin);
+            return JSON.parse(decrypted);
+        } catch {
+            return [];
+        }
+    }
+    return transcript;
+}
+
+async function decryptTodoItemsField(todoItems: string | TodoItem[] | undefined, pin: string): Promise<TodoItem[]> {
+    if (!todoItems) return [];
+    if (typeof todoItems === 'string') {
+        try {
+            const decrypted = await CryptoService.decrypt(todoItems, pin);
+            return JSON.parse(decrypted);
+        } catch {
+            return [];
+        }
+    }
+    return todoItems;
+}
+
 export const SessionDetailModal: React.FC<SessionDetailModalProps> = ({ 
     session, onClose, onDelete, onUpdate, onAddTask, pin, industry, storageProvider, showStatus, isDarkMode
 }) => {
@@ -48,75 +83,12 @@ export const SessionDetailModal: React.FC<SessionDetailModalProps> = ({
                 setDecryptedNotes(notes);
                 setEditedNotes(notes);
 
-                // Decrypt participants if present
-                if (session.participants) {
-                    try {
-                        const participants = await CryptoService.decrypt(session.participants, pin);
-                        setDecryptedParticipants(participants);
-                    } catch { 
-                        // If decryption fails, assume it's plain text
-                        setDecryptedParticipants(session.participants); 
-                    }
-                } else {
-                    setDecryptedParticipants('');
-                }
+                setDecryptedParticipants(await decryptStringField(session.participants, pin));
+                setDecryptedSummary(await decryptStringField(session.summary, pin));
+                setDecryptedOutline(await decryptStringField(session.outline, pin));
 
-                // Decrypt transcript if present
-                if (session.transcript) {
-                    if (typeof session.transcript === 'string') {
-                        try {
-                            const decryptedTranscript = await CryptoService.decrypt(session.transcript, pin);
-                            setDecryptedTranscript(JSON.parse(decryptedTranscript));
-                        } catch { 
-                            // If it's a string but not encrypted JSON, it might be legacy or error
-                            setDecryptedTranscript([]); 
-                        }
-                    } else if (Array.isArray(session.transcript)) {
-                        setDecryptedTranscript(session.transcript);
-                    }
-                } else {
-                    setDecryptedTranscript([]);
-                }
-
-                // Decrypt summary if present
-                if (session.summary) {
-                    try {
-                        const summary = await CryptoService.decrypt(session.summary, pin);
-                        setDecryptedSummary(summary);
-                    } catch { 
-                        setDecryptedSummary(session.summary); 
-                    }
-                } else {
-                    setDecryptedSummary('');
-                }
-
-                // Decrypt outline if present
-                if (session.outline) {
-                    try {
-                        const outline = await CryptoService.decrypt(session.outline, pin);
-                        setDecryptedOutline(outline);
-                    } catch { 
-                        setDecryptedOutline(session.outline); 
-                    }
-                } else {
-                    setDecryptedOutline('');
-                }
-
-                // Decrypt todoItems if present
-                if (session.todoItems) {
-                    if (typeof session.todoItems === 'string') {
-                        try {
-                            const decryptedTodos = await CryptoService.decrypt(session.todoItems, pin);
-                            setDecryptedTodoItems(JSON.parse(decryptedTodos));
-                        } catch { 
-                            setDecryptedTodoItems([]); 
-                        }
-                    } else if (Array.isArray(session.todoItems)) {
-                        setDecryptedTodoItems(session.todoItems);
-                    }
-                } else {
-                    setDecryptedTodoItems([]);
-                }
+                setDecryptedTranscript(await decryptTranscriptField(session.transcript, pin));
+                setDecryptedTodoItems(await decryptTodoItemsField(session.todoItems, pin));
 
                 const blob = await storageProvider.getAudioBlob(session.id!);
                 if (blob) {
