@@ -1,10 +1,14 @@
+// Mock import.meta for env resolution
+if (typeof globalThis.importMeta === 'undefined' && typeof import.meta === 'object') {
+    Object.defineProperty(import.meta, 'env', { value: {}, writable: true });
+}
 import test from 'node:test';
 import assert from 'node:assert';
 import { OnDeviceAIService } from './onDeviceAIService.ts';
 
 test('OnDeviceAIService analyze should fallback to on-device models when GEMINI_API_KEY is not present', async (t) => {
     const originalEnv = process.env.GEMINI_API_KEY;
-    delete process.env.GEMINI_API_KEY;
+    delete process.env.GEMINI_API_KEY; globalThis.importMeta = { env: { VITE_GEMINI_API_KEY: undefined } };
 
     const originalWindow = global.window;
     const originalBlob = global.Blob;
