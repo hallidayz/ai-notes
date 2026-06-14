@@ -171,9 +171,11 @@ export class ServerStorageProvider implements StorageProvider {
     async getConfig(key: string) {
         const { CryptoService } = await import('./cryptoService');
         try {
-            const res = await fetch('/api/storage/list');
-            const files = await res.json();
-            const configFile = files.find((f: { id: string, data: { encrypted?: string } }) => f.id === `config_${key}`);
+            const res = await fetch(`/api/storage/item/config_${key}`);
+            if (!res.ok) {
+                return undefined;
+            }
+            const configFile = await res.json();
             if (configFile?.data?.encrypted) {
                 const decrypted = await CryptoService.decrypt(configFile.data.encrypted, this.pin);
                 return JSON.parse(decrypted);
