@@ -74,4 +74,22 @@ test('CryptoService.decrypt', async (t) => {
             }
         );
     });
+
+    await t.test('throws error with old format legacy data', async () => {
+        const pin = "1234";
+        // Create an old format payload: base64 encoded [IV (12 bytes) + Encrypted Content]
+        // This lacks the 4-byte MARKER and 16-byte SALT at the beginning.
+        // We will just create a valid-looking base64 string that is not the new format.
+        const legacyDataBytes = new Uint8Array(20); // Just dummy data
+        const legacyBase64 = btoa(String.fromCharCode(...legacyDataBytes));
+
+        await assert.rejects(
+            async () => {
+                await CryptoService.decrypt(legacyBase64, pin);
+            },
+            (err: Error) => {
+                return err.message === 'Invalid PIN or corrupted data.';
+            }
+        );
+    });
 });

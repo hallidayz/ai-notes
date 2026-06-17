@@ -1,6 +1,5 @@
 
 export class CryptoService {
-    private static readonly OLD_SALT = 'a-very-secure-static-salt-for-whisper-notes';
     private static readonly ITERATIONS = 100000;
     private static readonly SALT_LENGTH = 16;
     private static readonly IV_LENGTH = 12;
@@ -50,19 +49,14 @@ export class CryptoService {
         const isNewFormat = encryptedBytes.length >= this.MARKER.length &&
             this.MARKER.every((byte, i) => encryptedBytes[i] === byte);
 
-        if (isNewFormat) {
-            return {
-                salt: encryptedBytes.slice(this.MARKER.length, this.MARKER.length + this.SALT_LENGTH),
-                iv: encryptedBytes.slice(this.MARKER.length + this.SALT_LENGTH, this.MARKER.length + this.SALT_LENGTH + this.IV_LENGTH),
-                encryptedContent: encryptedBytes.slice(this.MARKER.length + this.SALT_LENGTH + this.IV_LENGTH),
-            };
+        if (!isNewFormat) {
+            throw new Error("Unsupported legacy encryption format.");
         }
 
-        const enc = new TextEncoder();
         return {
-            salt: enc.encode(this.OLD_SALT),
-            iv: encryptedBytes.slice(0, this.IV_LENGTH),
-            encryptedContent: encryptedBytes.slice(this.IV_LENGTH),
+            salt: encryptedBytes.slice(this.MARKER.length, this.MARKER.length + this.SALT_LENGTH),
+            iv: encryptedBytes.slice(this.MARKER.length + this.SALT_LENGTH, this.MARKER.length + this.SALT_LENGTH + this.IV_LENGTH),
+            encryptedContent: encryptedBytes.slice(this.MARKER.length + this.SALT_LENGTH + this.IV_LENGTH),
         };
     }
 
