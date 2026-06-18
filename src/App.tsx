@@ -2,7 +2,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Session, Task, StorageType, StorageProvider } from './types';
 import { NotesDB } from './services/notesDB';
-import { IndexedDBProvider, ServerStorageProvider } from './services/storageProvider';
+import { ServerStorageProvider, FileSystemStorageProvider, FileSystemDirectoryHandle } from './services/storageProvider';
 import { AuthScreen } from './components/AuthScreen';
 import { ThemeToggle } from './components/ThemeToggle';
 import { ViewSwitcher } from './components/ViewSwitcher';
@@ -10,10 +10,11 @@ import { NewSessionForm } from './components/NewSessionForm';
 import { SessionsList } from './components/SessionsList';
 import { SessionDetailModal } from './components/SessionDetailModal';
 import { TaskManager } from './components/TaskManager';
+import { CalendarIntegration } from './components/CalendarIntegration';
+import { LocalModels } from './components/LocalModels';
 import { Settings } from './components/Settings';
-import { AppIcon } from './components/AppIcon';
 import { onDeviceAIService } from './services/onDeviceAIService';
-import { BRAND } from './branding';
+import { Settings as SettingsIcon } from 'lucide-react';
 
 const db = new NotesDB();
 
@@ -49,11 +50,11 @@ const MainApp: React.FC<{ pin: string, isDarkMode: boolean, onToggleTheme: () =>
     const [tasks, setTasks] = useState<Task[]>([]);
     const [selectedSession, setSelectedSession] = useState<Session | null>(null);
     const [isLoading, setIsLoading] = useState(true);
-    const [view, setView] = useState<'sessions' | 'tasks'>('sessions');
-    const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+    const [view, setView] = useState<'sessions' | 'tasks' | 'calendar' | 'local_models' | 'settings'>('sessions');
     const [industry, setIndustry] = useState('General');
     const [storageType, setStorageType] = useState<StorageType>(StorageType.BROWSER);
-    const [storageProvider, setStorageProvider] = useState<StorageProvider>(new IndexedDBProvider(db));
+    const [storageProvider, setStorageProvider] = useState<StorageProvider>(new FileSystemStorageProvider(db));
+    const [isStorageConfigured, setIsStorageConfigured] = useState<boolean>(true);
     const [status, setStatus] = useState<{ message: string, type: 'success' | 'error' | 'info' }>({ message: '', type: 'info' });
     const [confirmDeleteSessionId, setConfirmDeleteSessionId] = useState<number | null>(null);
 
@@ -65,17 +66,29 @@ const MainApp: React.FC<{ pin: string, isDarkMode: boolean, onToggleTheme: () =>
                 if (savedIndustry) setIndustry(savedIndustry);
 
                 const savedStorageType = await db.getConfig('storageType') as StorageType;
-                if (savedStorageType) setStorageType(savedStorageType);
+                if (savedStorageType) {
+                    setStorageType(savedStorageType);
+                    setIsStorageConfigured(true);
+                } else {
+                    setIsStorageConfigured(false);
+                }
                 
-                const provider = savedStorageType === StorageType.SERVER 
-                    ? new ServerStorageProvider(pin) 
-                    : new IndexedDBProvider(db);
+                let provider: StorageProvider;
+                if (savedStorageType === StorageType.SERVER) {
+                    provider = new ServerStorageProvider(pin);
+                } else {
+                    const fsProvider = new FileSystemStorageProvider(db);
+                    await fsProvider.init();
+                    provider = fsProvider;
+                }
                 setStorageProvider(provider);
 
                 const modelConfig = await provider.getConfig('model_config');
                 if (modelConfig) {
                     onDeviceAIService.updateConfig(modelConfig);
                 }
+
+                // Initial load will happen in the storageProvider effect
             } catch (err) {
                 console.error("Error loading initial config:", err);
             } finally {
@@ -190,24 +203,6 @@ const MainApp: React.FC<{ pin: string, isDarkMode: boolean, onToggleTheme: () =>
         }
     };
 
-    const handleAddTasks = async (tasksData: Omit<Task, 'id' | 'timestamp'>[]) => {
-        try {
-            const now = Date.now();
-            const newTasks: Task[] = tasksData.map(taskData => ({
-                ...taskData,
-                timestamp: now
-            }));
-            await storageProvider.saveTasks(newTasks);
-            await loadData();
-            showStatus(`${newTasks.length} tasks added.`, 'success');
-            return true;
-        } catch (err) {
-            console.error("Error adding tasks:", err);
-            showStatus('Failed to add tasks.', 'error');
-            return false;
-        }
-    };
-
     const handleUpdateTask = async (task: Task) => {
         try {
             await storageProvider.updateTask(task);
@@ -237,7 +232,9 @@ const MainApp: React.FC<{ pin: string, isDarkMode: boolean, onToggleTheme: () =>
         if (type === StorageType.SERVER) {
             setStorageProvider(new ServerStorageProvider(pin));
         } else {
-            setStorageProvider(new IndexedDBProvider(db));
+            const fsProvider = new FileSystemStorageProvider(db);
+            await fsProvider.init();
+            setStorageProvider(fsProvider);
         }
         showStatus(`Switched to ${type} storage.`, 'info');
     };
@@ -247,8 +244,8 @@ const MainApp: React.FC<{ pin: string, isDarkMode: boolean, onToggleTheme: () =>
             case 'sessions':
                 return (
                     <>
-                        <NewSessionForm onAddSession={handleAddSession} showStatus={showStatus} isDarkMode={isDarkMode} />
-                        <SessionsList sessions={sessions} onSelect={setSelectedSession} onDelete={handleDeleteSession} isDarkMode={isDarkMode} />
+                        <NewSessionForm onAddSession={handleAddSession} showStatus={showStatus} />
+                        <SessionsList sessions={sessions} onSelect={setSelectedSession} onDelete={handleDeleteSession} />
                     </>
                 );
             case 'tasks':
@@ -256,45 +253,173 @@ const MainApp: React.FC<{ pin: string, isDarkMode: boolean, onToggleTheme: () =>
                     <TaskManager 
                         tasks={tasks}
                         onAddTask={handleAddTask}
-                        onAddTasks={handleAddTasks}
                         onUpdateTask={handleUpdateTask}
                         onDeleteTask={handleDeleteTask}
                         sessions={sessions}
                         storageProvider={storageProvider}
                         industry={industry}
                         onUpdateSession={handleUpdateSession}
-                        isDarkMode={isDarkMode}
                     />
                 );
+            case 'calendar':
+                return <CalendarIntegration showStatus={showStatus} />;
             default:
                 return null;
         }
     };
 
+    const [storageFolder, setStorageFolder] = useState<string>('Downloads');
+
+    useEffect(() => {
+        const loadFolder = async () => {
+            const savedFolder = await db.getConfig('storageFolder') as string;
+            if (savedFolder) setStorageFolder(savedFolder);
+        };
+        loadFolder();
+    }, []);
+
+    const handleSelectFolder = async (e: React.MouseEvent) => {
+        e.stopPropagation();
+        try {
+            if ('showDirectoryPicker' in window) {
+                const dirHandle = await (window as { showDirectoryPicker?: (options?: { startIn: string }) => Promise<FileSystemDirectoryHandle> }).showDirectoryPicker?.({ startIn: 'downloads' });
+                if (dirHandle) {
+                    setStorageFolder(dirHandle.name);
+                    await db.saveConfig('storageFolder', dirHandle.name);
+                    if (storageProvider instanceof FileSystemStorageProvider) {
+                        await storageProvider.setDirHandle(dirHandle);
+                    }
+                    showStatus(`Storage folder set to ${dirHandle.name}`, 'success');
+                }
+            } else {
+                showStatus('Directory picker not supported in this browser', 'error');
+            }
+        } catch (err) {
+            console.error('Error selecting folder:', err);
+        }
+    };
+
+    if (view === 'local_models') {
+        return <LocalModels storageProvider={storageProvider} onBack={() => setView('sessions')} showStatus={showStatus} />;
+    }
+
+    if (view === 'settings') {
+        return <Settings 
+            onBack={() => setView('sessions')} 
+            showStatus={showStatus} 
+            storageType={storageType} 
+            onStorageTypeChange={handleStorageTypeChange} 
+            storageFolder={storageFolder}
+            onStorageFolderChange={async (folder, dirHandle) => {
+                setStorageFolder(folder);
+                await db.saveConfig('storageFolder', folder);
+                if (dirHandle && storageProvider instanceof FileSystemStorageProvider) {
+                    await storageProvider.setDirHandle(dirHandle);
+                }
+            }}
+        />;
+    }
+
+    if (!isStorageConfigured && !isLoading) {
+        return (
+            <div className="container" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', minHeight: '100vh' }}>
+                <div className="card" style={{ maxWidth: '600px', width: '100%', padding: '40px', textAlign: 'center' }}>
+                    <h2 style={{ marginBottom: '10px' }}>Welcome to AI Notes</h2>
+                    <p style={{ color: 'var(--text-secondary)', marginBottom: '30px' }}>Please select where you want to store your data.</p>
+                    
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '15px', marginBottom: '30px' }}>
+                        <div 
+                            className={`storage-option ${storageType === StorageType.BROWSER ? 'active' : ''}`}
+                            onClick={() => setStorageType(StorageType.BROWSER)}
+                            style={{ padding: '20px', textAlign: 'left', cursor: 'pointer', border: '1px solid var(--border-color)', borderRadius: '8px', backgroundColor: storageType === StorageType.BROWSER ? 'var(--bg-secondary)' : 'transparent', display: 'flex', flexDirection: 'column' }}
+                        >
+                            <div className="storage-option-info">
+                                <span className="storage-option-title" style={{ display: 'block', fontWeight: 'bold', marginBottom: '5px' }}>Browser (IndexedDB)</span>
+                                <span className="storage-option-desc" style={{ fontSize: '0.9em', color: 'var(--text-secondary)', marginBottom: '15px', display: 'block' }}>Fastest, fully offline, data stays in this browser. This does require the files to be written to a location on the device, by default, make it the downloads folder and allow the user to change it based on what they want to use.</span>
+                            </div>
+                            {storageType === StorageType.BROWSER && (
+                                <div style={{ marginTop: 'auto', paddingTop: '15px', borderTop: '1px solid var(--border-color)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                                    <span style={{ fontSize: '0.8em', fontWeight: 500, color: 'var(--text-secondary)' }}>Folder: {storageFolder}</span>
+                                    <button 
+                                        type="button"
+                                        onClick={handleSelectFolder}
+                                        className="btn-secondary"
+                                        style={{ fontSize: '0.8em', padding: '5px 10px' }}
+                                    >
+                                        Change Folder
+                                    </button>
+                                </div>
+                            )}
+                        </div>
+                        <div 
+                            className={`storage-option ${storageType === StorageType.SERVER ? 'active' : ''}`}
+                            onClick={() => setStorageType(StorageType.SERVER)}
+                            style={{ padding: '20px', textAlign: 'left', cursor: 'pointer', border: '1px solid var(--border-color)', borderRadius: '8px', backgroundColor: storageType === StorageType.SERVER ? 'var(--bg-secondary)' : 'transparent' }}
+                        >
+                            <div className="storage-option-info">
+                                <span className="storage-option-title" style={{ display: 'block', fontWeight: 'bold', marginBottom: '5px' }}>Server (Cloud)</span>
+                                <span className="storage-option-desc" style={{ fontSize: '0.9em', color: 'var(--text-secondary)' }}>Sync across devices, data stored on our secure server.</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <button 
+                        className="btn-primary" 
+                        style={{ width: '100%', padding: '15px', fontSize: '1.1em' }}
+                        onClick={() => {
+                            handleStorageTypeChange(storageType);
+                            setIsStorageConfigured(true);
+                        }}
+                    >
+                        Continue
+                    </button>
+                </div>
+            </div>
+        );
+    }
+
     return (
         <div className="container">
             <header>
-                <div className="header-actions">
-                    <button
-                        onClick={() => setIsSettingsOpen(true)}
-                        className="btn-secondary header-icon-btn"
+                <div style={{ position: 'absolute', top: '20px', right: '20px', display: 'flex', gap: '10px' }}>
+                    <button 
+                        onClick={() => setView('settings')}
+                        className="btn-secondary"
+                        style={{ padding: '8px', borderRadius: '50%', width: '40px', height: '40px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
                         title="Settings"
-                        aria-label="Settings"
                     >
-                        <AppIcon name="settings" size={20} isDarkMode={isDarkMode} />
+                        <SettingsIcon className="w-5 h-5" />
+                    </button>
+                    <button 
+                        onClick={() => setView('local_models')}
+                        className="btn-secondary"
+                        style={{ padding: '8px', borderRadius: '50%', width: '40px', height: '40px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                        title="Local Models"
+                    >
+                        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2v8"/><path d="m16 6-4 4-4-4"/><rect width="20" height="8" x="2" y="14" rx="2"/><path d="M6 18h.01"/><path d="M10 18h.01"/></svg>
                     </button>
                     <ThemeToggle isDarkMode={isDarkMode} onToggle={onToggleTheme} />
                 </div>
-                <div className="brand-lockup">
-                    <AppIcon name="logo" size={40} isDarkMode={isDarkMode} className="brand-logo" />
-                    <div>
-                        <h1>{BRAND.name}</h1>
-                        <p>{BRAND.tagline}</p>
-                    </div>
+                <h1>AI Notes</h1>
+                <p>Private, Secure, On-Device Intelligence</p>
+                <div className="settings-container">
+                    <label htmlFor="industrySelector">Industry Context:</label>
+                    <select 
+                        id="industrySelector" 
+                        value={industry} 
+                        onChange={(e) => handleIndustryChange(e.target.value)}
+                    >
+                        <option value="General">General</option>
+                        <option value="Medical">Medical</option>
+                        <option value="Legal">Legal</option>
+                        <option value="Therapy">Therapy</option>
+                        <option value="Business">Business/Meetings</option>
+                        <option value="Education">Education</option>
+                    </select>
                 </div>
-
+                
                 <div className="privacy-badge">
-                    <AppIcon name="shield" size={16} isDarkMode={isDarkMode} />
+                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16"><path d="M8 1a2 2 0 0 1 2 2v4H6V3a2 2 0 0 1 2-2zm3 6V3a3 3 0 0 0-6 0v4a2 2 0 0 0-2 2v5a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2z"/></svg>
                     End-to-End Encrypted & On-Device AI
                 </div>
             </header>
@@ -320,21 +445,8 @@ const MainApp: React.FC<{ pin: string, isDarkMode: boolean, onToggleTheme: () =>
                     industry={industry}
                     storageProvider={storageProvider}
                     showStatus={showStatus}
-                    isDarkMode={isDarkMode}
                 />
             )}
-
-            <Settings
-                isOpen={isSettingsOpen}
-                onClose={() => setIsSettingsOpen(false)}
-                industry={industry}
-                onIndustryChange={handleIndustryChange}
-                storageProvider={storageProvider}
-                storageType={storageType}
-                onStorageTypeChange={handleStorageTypeChange}
-                showStatus={showStatus}
-                isDarkMode={isDarkMode}
-            />
 
             {confirmDeleteSessionId !== null && (
                 <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[100] p-4">

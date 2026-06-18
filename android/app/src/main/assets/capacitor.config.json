@@ -1,0 +1,9 @@
+{
+	"appId": "com.acmi.ainotes",
+	"appName": "AI Notes",
+	"webDir": "dist",
+	"server": {
+		"androidScheme": "https",
+		"cleartext": true
+	}
+}

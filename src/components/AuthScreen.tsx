@@ -1,8 +1,5 @@
 
 import React, { useState } from 'react';
-import { ThemeToggle } from './ThemeToggle';
-import { AppIcon } from './AppIcon';
-import { BRAND } from '../branding';
 
 interface AuthScreenProps {
     onAuthenticate: (pin: string) => void;
@@ -23,27 +20,19 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthenticate, isDarkMo
     return (
         <div className="auth-screen">
             <div className="auth-card">
-                <div className="header-actions">
-                    <ThemeToggle isDarkMode={isDarkMode} onToggle={onToggleTheme} />
+                <div style={{ position: 'absolute', top: '20px', right: '20px' }}>
+                    <button className="theme-toggle" onClick={onToggleTheme}>
+                        {isDarkMode ? '☀️' : '🌙'}
+                    </button>
                 </div>
-                <div className="brand-lockup brand-lockup-centered">
-                    <AppIcon name="logo" size={48} isDarkMode={isDarkMode} className="brand-logo" />
-                    <div>
-                        <h1>{BRAND.name}</h1>
-                        <p>Secure, on-device AI transcription and analysis.</p>
-                    </div>
-                </div>
-                <form onSubmit={handleSubmit} autoComplete="off">
-                    <label htmlFor="app-pin" className="visually-hidden">PIN</label>
+                <h1>AI Notes</h1>
+                <p>Secure, on-device AI transcription and analysis.</p>
+                <form onSubmit={handleSubmit}>
                     <input
-                        id="app-pin"
-                        name="pin"
                         type="password"
-                        inputMode="numeric"
                         placeholder="Enter your PIN"
                         value={pin}
                         onChange={e => setPin(e.target.value)}
-                        autoComplete="current-password"
                         autoFocus
                     />
                     <button type="submit" className="btn-primary" disabled={pin.length < 4}>

@@ -2,12 +2,13 @@
 export interface TranscriptChunk {
     speaker: string;
     text: string;
+    timestamp?: [number, number];
 }
 
 export interface TodoItem {
     text: string;
     completed: boolean;
-    promotedAt?: number;
+    promotedToTaskId?: number;
 }
 
 export interface Session {
@@ -43,6 +44,14 @@ export enum StorageType {
     FILESYSTEM = 'filesystem'
 }
 
+export interface CalendarConnection {
+    id?: number;
+    provider: 'google' | 'microsoft' | 'notion' | 'apple';
+    encryptedTokens: string; // Encrypted JSON string of tokens/credentials
+    accountName?: string;
+    timestamp: number;
+}
+
 export interface LocalModel {
     id: string;
     name: string;
@@ -67,10 +76,12 @@ export interface StorageProvider {
     saveAudioBlob(sessionId: number, blob: Blob): Promise<void>;
     getAudioBlob(sessionId: number): Promise<Blob | undefined>;
     saveTask(task: Task): Promise<number>;
-    saveTasks(tasks: Task[]): Promise<number[]>;
     getAllTasks(): Promise<Task[]>;
     updateTask(task: Task): Promise<void>;
     deleteTask(id: number): Promise<void>;
+    saveCalendarConnection(connection: CalendarConnection): Promise<number>;
+    getAllCalendarConnections(): Promise<CalendarConnection[]>;
+    deleteCalendarConnection(id: number): Promise<void>;
     saveConfig(key: string, value: unknown): Promise<void>;
     getConfig(key: string): Promise<unknown>;
 }

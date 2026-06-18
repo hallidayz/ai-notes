@@ -1,16 +1,14 @@
 
 import React from 'react';
 import { Task } from '../types';
-import { AppIcon } from './AppIcon';
 
 interface TaskItemProps {
     task: Task;
     onUpdate: (task: Task) => void;
     onDelete: (id: number) => void;
-    isDarkMode: boolean;
 }
 
-export const TaskItem: React.FC<TaskItemProps> = ({ task, onUpdate, onDelete, isDarkMode }) => {
+export const TaskItem: React.FC<TaskItemProps> = ({ task, onUpdate, onDelete }) => {
     const handleStatusToggle = () => {
         const nextStatus: Task['status'] = 
             task.status === 'todo' ? 'inprogress' : 
@@ -30,7 +28,7 @@ export const TaskItem: React.FC<TaskItemProps> = ({ task, onUpdate, onDelete, is
     return (
         <div className={`task-item ${task.status === 'done' ? 'done' : ''}`}>
             <div className="task-checkbox" onClick={handleStatusToggle}>
-                {task.status === 'done' && <AppIcon name="check" size={14} isDarkMode={isDarkMode} />}
+                {task.status === 'done' ? '✓' : ''}
             </div>
             <div className="task-info">
                 <div className="task-title-row">
@@ -43,7 +41,7 @@ export const TaskItem: React.FC<TaskItemProps> = ({ task, onUpdate, onDelete, is
                 </div>
             </div>
             <button className="task-delete" onClick={() => onDelete(task.id!)} aria-label="Delete task">
-                <AppIcon name="close" size={14} isDarkMode={isDarkMode} />
+                &times;
             </button>
         </div>
     );

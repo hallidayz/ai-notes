@@ -12,7 +12,6 @@ interface TaskManagerProps {
     storageProvider: StorageProvider;
     industry: string;
     onUpdateSession: (session: Session) => Promise<void>;
-    isDarkMode: boolean;
 }
 
 export const TaskManager: React.FC<TaskManagerProps> = ({ 
@@ -23,8 +22,7 @@ export const TaskManager: React.FC<TaskManagerProps> = ({
     sessions,
     storageProvider,
     industry,
-    onUpdateSession,
-    isDarkMode,
+    onUpdateSession
 }) => {
     const [newTaskTitle, setNewTaskTitle] = useState('');
     const [newTaskPriority, setNewTaskPriority] = useState<Task['priority']>('medium');
@@ -100,20 +98,19 @@ export const TaskManager: React.FC<TaskManagerProps> = ({
             };
             await onUpdateSession(updatedSession);
 
-            // Create tasks from action items concurrently
-            const addPromises = results.action_items.map((item: string) =>
-                onAddTask({
+            // Create tasks from action items
+            let addedCount = 0;
+            for (const item of results.action_items) {
+                const success = await onAddTask({
                     title: item,
                     priority: 'medium',
                     dueDate: null,
                     status: 'todo',
                     sessionId: session.id,
                     sessionName: session.sessionTitle
-                })
-            );
-
-            const addResults = await Promise.all(addPromises);
-            const addedCount = addResults.filter(success => success).length;
+                });
+                if (success) addedCount++;
+            }
 
             setSuccessMessage(`Successfully generated ${addedCount} tasks from session "${session.sessionTitle}"!`);
             setAnalysisSessionId(undefined);
@@ -178,15 +175,12 @@ export const TaskManager: React.FC<TaskManagerProps> = ({
 
             <div className="card">
                 <h3>Add New Task</h3>
-                <form onSubmit={handleSubmit} className="task-form" autoComplete="off">
+                <form onSubmit={handleSubmit} className="task-form">
                     <div className="form-grid">
                         <div className="grid-col-span-2">
-                            <label className="input-label" htmlFor="new-task-title">Task Title</label>
+                            <label className="input-label">Task Title</label>
                             <input
-                                id="new-task-title"
                                 type="text"
-                                name="task-title"
-                                autoComplete="off"
                                 placeholder="What needs to be done?"
                                 value={newTaskTitle}
                                 onChange={e => setNewTaskTitle(e.target.value)}
@@ -234,7 +228,7 @@ export const TaskManager: React.FC<TaskManagerProps> = ({
                     <div className="empty-state">No tasks yet. Add one above or promote an action item from a session!</div>
                 ) : (
                     sortedTasks.map(task => (
-                        <TaskItem key={task.id} task={task} onUpdate={onUpdateTask} onDelete={onDeleteTask} isDarkMode={isDarkMode} />
+                        <TaskItem key={task.id} task={task} onUpdate={onUpdateTask} onDelete={onDeleteTask} />
                     ))
                 )}
             </div>

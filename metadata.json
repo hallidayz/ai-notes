@@ -3,5 +3,8 @@
   "description": "On-Device, Private, AI Powered Notes with Full-Stack Local Storage options.",
   "requestFramePermissions": [
     "microphone"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
   ]
 }

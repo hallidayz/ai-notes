@@ -4,7 +4,7 @@ import { Session, Task, TodoItem, StorageProvider, TranscriptChunk } from '../ty
 import { CryptoService } from '../services/cryptoService';
 import { onDeviceAIService } from '../services/onDeviceAIService';
 import { AudioPlayer } from './AudioPlayer';
-import { AppIcon } from './AppIcon';
+import { StructuredExportModule } from './StructuredExportModule';
 
 interface SessionDetailModalProps {
     session: Session;
@@ -16,11 +16,10 @@ interface SessionDetailModalProps {
     industry: string;
     storageProvider: StorageProvider;
     showStatus: (msg: string, type: 'success' | 'error' | 'info') => void;
-    isDarkMode: boolean;
 }
 
 export const SessionDetailModal: React.FC<SessionDetailModalProps> = ({ 
-    session, onClose, onDelete, onUpdate, onAddTask, pin, industry, storageProvider, showStatus, isDarkMode
+    session, onClose, onDelete, onUpdate, onAddTask, pin, industry, storageProvider, showStatus 
 }) => {
     const [decryptedNotes, setDecryptedNotes] = useState('');
     const [isDecrypting, setIsDecrypting] = useState(true);
@@ -180,7 +179,7 @@ export const SessionDetailModal: React.FC<SessionDetailModalProps> = ({
         }
     };
     
-    const handlePromoteTodoToTask = useCallback(async (todo: TodoItem, todoIndex: number) => {
+    const handlePromoteTodoToTask = async (todo: TodoItem, todoIndex: number) => {
         const success = await onAddTask({
             title: todo.text,
             dueDate: null,
@@ -193,7 +192,7 @@ export const SessionDetailModal: React.FC<SessionDetailModalProps> = ({
 
         if (success) {
             const updatedTodos = [...decryptedTodoItems];
-            updatedTodos[todoIndex] = { ...todo, promotedAt: Date.now() };
+            updatedTodos[todoIndex] = { ...todo, promotedToTaskId: Date.now() };
             
             try {
                 const encryptedTodos = await CryptoService.encrypt(JSON.stringify(updatedTodos), pin);
@@ -203,9 +202,9 @@ export const SessionDetailModal: React.FC<SessionDetailModalProps> = ({
                 console.error("Failed to encrypt todos", err);
             }
         }
-    }, [onAddTask, session, decryptedTodoItems, pin, audioBlob, onUpdate]);
+    };
     
-    const handleTodoToggle = useCallback(async (index: number) => {
+    const handleTodoToggle = async (index: number) => {
         const updatedTodos = [...decryptedTodoItems];
         updatedTodos[index].completed = !updatedTodos[index].completed;
         
@@ -216,25 +215,7 @@ export const SessionDetailModal: React.FC<SessionDetailModalProps> = ({
         } catch (err) {
             console.error("Failed to encrypt todos", err);
         }
-    }, [decryptedTodoItems, pin, session, audioBlob, onUpdate]);
-
-    const onTodoToggleClick = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
-        const indexStr = e.currentTarget.dataset.index;
-        if (indexStr !== undefined) {
-            handleTodoToggle(parseInt(indexStr, 10));
-        }
-    }, [handleTodoToggle]);
-
-    const onPromoteClick = useCallback((e: React.MouseEvent<HTMLButtonElement>) => {
-        const indexStr = e.currentTarget.dataset.index;
-        if (indexStr !== undefined) {
-            const index = parseInt(indexStr, 10);
-            const todo = decryptedTodoItems[index];
-            if (todo) {
-                handlePromoteTodoToTask(todo, index);
-            }
-        }
-    }, [decryptedTodoItems, handlePromoteTodoToTask]);
+    };
 
     const handleRunOnDeviceAnalysis = useCallback(async () => {
         setAiAnalysisStatus('in_progress');
@@ -248,9 +229,28 @@ export const SessionDetailModal: React.FC<SessionDetailModalProps> = ({
                  setAiProgress({ status, progress: progress || 0 });
             });
             
+            // Perform simple diarization based on pauses if it's the fallback model
+            let finalTranscript = result.transcript;
+            const isFallback = finalTranscript.every(c => c.speaker === 'Speaker 1') && finalTranscript.some(c => c.timestamp);
+            if (isFallback) {
+                let currentSpeaker = 'Speaker 1';
+                const PAUSE_THRESHOLD = 1.5; // seconds
+                finalTranscript = finalTranscript.map((chunk, index) => {
+                    if (index === 0) return { ...chunk, speaker: currentSpeaker };
+                    const prevChunk = finalTranscript[index - 1];
+                    if (chunk.timestamp && prevChunk.timestamp) {
+                        const pause = chunk.timestamp[0] - prevChunk.timestamp[1];
+                        if (pause > PAUSE_THRESHOLD) {
+                            currentSpeaker = currentSpeaker === 'Speaker 1' ? 'Speaker 2' : 'Speaker 1';
+                        }
+                    }
+                    return { ...chunk, speaker: currentSpeaker };
+                });
+            }
+
             const todoItems: TodoItem[] = (result.action_items || []).map(text => ({ text, completed: false }));
             
-            const encryptedTranscript = await CryptoService.encrypt(JSON.stringify(result.transcript), pin);
+            const encryptedTranscript = await CryptoService.encrypt(JSON.stringify(finalTranscript), pin);
             const encryptedSummary = await CryptoService.encrypt(result.summary, pin);
             const encryptedTodos = await CryptoService.encrypt(JSON.stringify(todoItems), pin);
             const encryptedOutline = await CryptoService.encrypt(result.outline, pin);
@@ -265,7 +265,7 @@ export const SessionDetailModal: React.FC<SessionDetailModalProps> = ({
                 audioBlob: audioBlob || undefined 
             });
             
-            setDecryptedTranscript(result.transcript);
+            setDecryptedTranscript(finalTranscript);
             setDecryptedSummary(result.summary);
             setDecryptedTodoItems(todoItems);
             setDecryptedOutline(result.outline);
@@ -311,18 +311,16 @@ export const SessionDetailModal: React.FC<SessionDetailModalProps> = ({
     return (
         <div className="modal active" onClick={onClose}>
             <div className="modal-content" onClick={e => e.stopPropagation()}>
-                <button className="close-btn" onClick={onClose} aria-label="Close">
-                    <AppIcon name="close" size={16} isDarkMode={isDarkMode} />
-                </button>
+                <button className="close-btn" onClick={onClose}>&times;</button>
                 <h2>{session.sessionTitle}</h2>
                 <p style={{ color: '#94a3b8', marginBottom: '16px' }}>{new Date(session.date).toLocaleDateString()}{decryptedParticipants && ` with ${decryptedParticipants}`}</p>
                 
-                {audioUrl && <AudioPlayer audioUrl={audioUrl} />}
+                {audioUrl && <AudioPlayer key={audioUrl} audioUrl={audioUrl} />}
 
                 {session.analysisStatus === 'none' && aiAnalysisStatus !== 'in_progress' && (
                     <div className="action-buttons" style={{ justifyContent: 'center', margin: '20px 0'}}>
                         <button className="btn-ai" onClick={handleRunOnDeviceAnalysis}>
-                            <AppIcon name="ai-chip" size={16} isDarkMode={isDarkMode} />
+                            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16"><path d="M5 2.5a.5.5 0 0 1 .5-.5h5a.5.5 0 0 1 0 1h-5a.5.5 0 0 1-.5-.5zm0 2a.5.5 0 0 1 .5-.5h5a.5.5 0 0 1 0 1h-5a.5.5 0 0 1-.5-.5zm0 2a.5.5 0 0 1 .5-.5h5a.5.5 0 0 1 0 1h-5a.5.5 0 0 1-.5-.5zm0 2a.5.5 0 0 1 .5-.5h5a.5.5 0 0 1 0 1h-5a.5.5 0 0 1-.5-.5zm0 2a.5.5 0 0 1 .5-.5h5a.5.5 0 0 1 0 1h-5a.5.5 0 0 1-.5-.5z"/><path d="M2 1a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V3a2 2 0 0 0-2-2H2zm12 1a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H2a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1h12z"/></svg>
                             Run On-Device Analysis
                         </button>
                     </div>
@@ -354,28 +352,27 @@ export const SessionDetailModal: React.FC<SessionDetailModalProps> = ({
                 {session.analysisStatus === 'complete' && (
                     <div className="analysis-section">
                         <div className="analysis-subsection">
-                            <h4 className="section-heading-icon"><AppIcon name="summary" size={16} isDarkMode={isDarkMode} /> Summary</h4>
+                            <h4>&#x1F4DD; Summary</h4>
                             <p>{decryptedSummary}</p>
                         </div>
                          {decryptedTodoItems && decryptedTodoItems.length > 0 && (
                             <div className="analysis-subsection">
-                                <h4 className="section-heading-icon"><AppIcon name="action-items" size={16} isDarkMode={isDarkMode} /> Action Items</h4>
+                                <h4>&#x2705; Action Items</h4>
                                 <ul className="action-items-list">
                                     {decryptedTodoItems.map((todo, index) => (
                                         <li key={index} className={`todo-item ${todo.completed ? 'completed' : ''}`}>
-                                            <div className="todo-content" data-index={index} onClick={onTodoToggleClick}>
+                                            <div className="todo-content" onClick={() => handleTodoToggle(index)}>
                                                 <input type="checkbox" readOnly checked={todo.completed} />
                                                 <span className="todo-text">{todo.text}</span>
                                             </div>
-                                            {todo.promotedAt ? (
+                                            {todo.promotedToTaskId ? (
                                                 <span className="task-promoted-badge">Tasked</span>
                                             ) : (
                                                 <button 
                                                     className="btn-promote-task" 
                                                     title="Promote to Task" 
-                                                    data-index={index}
-                                                    onClick={onPromoteClick}>
-                                                    <AppIcon name="plus" size={14} isDarkMode={isDarkMode} />
+                                                    onClick={() => handlePromoteTodoToTask(todo, index)}>
+                                                    &#x2795;
                                                 </button>
                                             )}
                                         </li>
@@ -385,11 +382,21 @@ export const SessionDetailModal: React.FC<SessionDetailModalProps> = ({
                         )}
                         {decryptedOutline && (
                              <div className="analysis-subsection">
-                                <h4 className="section-heading-icon"><AppIcon name="outline" size={16} isDarkMode={isDarkMode} /> Outline</h4>
+                                <h4>&#x1F4D1; Outline</h4>
                                 <div className="outline-content">{decryptedOutline}</div>
                             </div>
                         )}
                     </div>
+                )}
+
+                {/* Structured export module accessible once notes are loaded */}
+                {!isDecrypting && decryptedNotes && (
+                    <StructuredExportModule
+                        decryptedNotes={decryptedNotes}
+                        decryptedSummary={decryptedSummary}
+                        decryptedOutline={decryptedOutline}
+                        showStatus={showStatus}
+                    />
                 )}
 
                 <h3>Notes</h3>

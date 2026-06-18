@@ -1,10 +1,12 @@
 
-import { pipeline, env, AutomaticSpeechRecognitionPipeline, Text2TextGenerationPipeline } from '@xenova/transformers';
+import { pipeline, env } from '@xenova/transformers';
+import { GoogleGenAI, Type } from "@google/genai";
 import { TranscriptChunk, ModelConfig } from '../types';
 
 export class OnDeviceAIService {
     private static instance: OnDeviceAIService | null = null;
-    private pipelineCache: { [modelPath: string]: unknown } = {};
+    private transcriptionPipes = new Map<string, unknown>();
+    private analysisPipes = new Map<string, unknown>();
     private currentConfig: ModelConfig = {
         transcriptionModelId: 'whisper-tiny-en',
         analysisModelId: 'flan-t5-small'
@@ -12,7 +14,11 @@ export class OnDeviceAIService {
 
     private modelMap: { [key: string]: string } = {
         'whisper-tiny-en': 'Xenova/whisper-tiny.en',
+        'whisper-tiny-en-onnx': 'onnx-community/whisper-tiny.en',
         'whisper-base-en': 'Xenova/whisper-base.en',
+        'whisper-base-en-onnx': 'onnx-community/whisper-base.en',
+        'distil-whisper-small-en-onnx': 'onnx-community/distil-whisper-small.en',
+        'whisper-large-v3-turbo-onnx': 'onnx-community/whisper-large-v3-turbo',
         'flan-t5-small': 'Xenova/flan-t5-small',
         'flan-t5-base': 'Xenova/flan-t5-base',
         'phi-1_5': 'Xenova/phi-1_5',
@@ -34,42 +40,39 @@ export class OnDeviceAIService {
     }
 
     public updateConfig(config: ModelConfig) {
-        if (config.transcriptionModelId !== this.currentConfig.transcriptionModelId) {
-            const oldModelPath = this.modelMap[this.currentConfig.transcriptionModelId];
-            if (oldModelPath) delete this.pipelineCache[oldModelPath];
-        }
-        if (config.analysisModelId !== this.currentConfig.analysisModelId) {
-            const oldModelPath = this.modelMap[this.currentConfig.analysisModelId];
-            if (oldModelPath) delete this.pipelineCache[oldModelPath];
-        }
         this.currentConfig = config;
     }
 
-    public async preloadModel(modelPath: string, type: 'transcription' | 'analysis', progress_callback?: (progress: { status: string; progress?: number }) => void) {
-        const task = type === 'transcription' ? 'automatic-speech-recognition' : 'text2text-generation';
-        if (!this.pipelineCache[modelPath]) {
-            this.pipelineCache[modelPath] = await pipeline(task, modelPath, { progress_callback });
-        }
+    public async preloadModel(modelPath: string, progress_callback?: (progress: { status: string; progress?: number }) => void) {
+        // We just initialize a pipeline to trigger download
+        // We don't need to store it yet if it's just preloading
+        await pipeline('feature-extraction', modelPath, { progress_callback });
     }
 
     private async getTranscriptionPipeline(progress_callback?: (progress: { status: string; progress?: number }) => void) {
-        const modelPath = this.modelMap[this.currentConfig.transcriptionModelId] || 'Xenova/whisper-tiny.en';
-        if (!this.pipelineCache[modelPath]) {
-            this.pipelineCache[modelPath] = await pipeline('automatic-speech-recognition', modelPath, {
+        const modelId = this.currentConfig.transcriptionModelId;
+        const modelPath = this.modelMap[modelId] || 'Xenova/whisper-tiny.en';
+        if (!this.transcriptionPipes.has(modelId)) {
+            const pipe = await pipeline('automatic-speech-recognition', modelPath, {
                 progress_callback,
-            }) as AutomaticSpeechRecognitionPipeline;
+            });
+            this.transcriptionPipes.set(modelId, pipe);
         }
-        return this.pipelineCache[modelPath] as AutomaticSpeechRecognitionPipeline;
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        return this.transcriptionPipes.get(modelId) as any;
     }
 
     private async getAnalysisPipeline(progress_callback?: (progress: { status: string; progress?: number }) => void) {
-        const modelPath = this.modelMap[this.currentConfig.analysisModelId] || 'Xenova/flan-t5-small';
-        if (!this.pipelineCache[modelPath]) {
-            this.pipelineCache[modelPath] = await pipeline('text2text-generation', modelPath, {
+        const modelId = this.currentConfig.analysisModelId;
+        const modelPath = this.modelMap[modelId] || 'Xenova/flan-t5-small';
+        if (!this.analysisPipes.has(modelId)) {
+            const pipe = await pipeline('text2text-generation', modelPath, {
                 progress_callback,
-            }) as Text2TextGenerationPipeline;
+            });
+            this.analysisPipes.set(modelId, pipe);
         }
-        return this.pipelineCache[modelPath] as Text2TextGenerationPipeline;
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        return this.analysisPipes.get(modelId) as any;
     }
 
     public async analyze(
@@ -85,17 +88,20 @@ export class OnDeviceAIService {
         });
 
         progressCallback('Transcribing audio...');
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
-        const arrayBuffer = await audioBlob.arrayBuffer();
-        const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+        const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+        let audioBuffer: AudioBuffer;
+        try {
+            const arrayBuffer = await audioBlob.arrayBuffer();
+            audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+        } finally {
+            await audioContext.close().catch(err => console.error("Error closing AudioContext:", err));
+        }
         
         const transcription = await transcriber(audioBuffer.getChannelData(0), {
             chunk_length_s: 30,
             stride_length_s: 5,
             return_timestamps: true,
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        }) as any;
+        });
 
         const rawTranscript = (transcription.chunks || []).map((chunk: { text: string }) => chunk.text).join(' ');
         
@@ -103,38 +109,68 @@ export class OnDeviceAIService {
             return { transcript: [], summary: '', action_items: [], outline: '' };
         }
 
-        try {
-            const statusRes = await fetch('/api/ai/status');
-            const { hasApiKey } = await statusRes.json();
+        const apiKey = process.env.GEMINI_API_KEY;
+        if (apiKey) {
+            progressCallback('Performing advanced analysis & diarization with Gemini...');
+            try {
+                const ai = new GoogleGenAI({ apiKey });
+                const response = await ai.models.generateContent({
+                    model: "gemini-3-flash-preview",
+                    contents: `
+                        Analyze this ${industry} transcript. 
+                        1. Perform speaker diarization: Identify different speakers and attribute each part of the text to them.
+                        2. Summarize the session.
+                        3. Extract action items.
+                        4. Create a structured outline.
 
-            if (hasApiKey) {
-                progressCallback('Performing advanced analysis & diarization with Gemini...');
-                const response = await fetch('/api/ai/generate', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ industry, rawTranscript })
+                        Transcript:
+                        ${rawTranscript}
+                    `,
+                    config: {
+                        responseMimeType: "application/json",
+                        responseSchema: {
+                            type: Type.OBJECT,
+                            properties: {
+                                transcript: {
+                                    type: Type.ARRAY,
+                                    items: {
+                                        type: Type.OBJECT,
+                                        properties: {
+                                            speaker: { type: Type.STRING, description: "Name or label of the speaker (e.g., 'Speaker A', 'Dr. Smith')" },
+                                            text: { type: Type.STRING }
+                                        },
+                                        required: ["speaker", "text"]
+                                    }
+                                },
+                                summary: { type: Type.STRING },
+                                action_items: {
+                                    type: Type.ARRAY,
+                                    items: { type: Type.STRING }
+                                },
+                                outline: { type: Type.STRING }
+                            },
+                            required: ["transcript", "summary", "action_items", "outline"]
+                        }
+                    }
                 });
 
-                if (response.ok) {
-                    const result = await response.json();
-                    return {
-                        transcript: result.transcript || [],
-                        summary: result.summary || 'No summary generated.',
-                        action_items: result.action_items || [],
-                        outline: result.outline || 'No outline generated.'
-                    };
-                } else {
-                    console.error("Gemini analysis failed, falling back to on-device models. Status:", response.status);
-                }
+                const result = JSON.parse(response.text || '{}');
+                return {
+                    transcript: result.transcript || [],
+                    summary: result.summary || 'No summary generated.',
+                    action_items: result.action_items || [],
+                    outline: result.outline || 'No outline generated.'
+                };
+            } catch (err) {
+                console.error("Gemini analysis failed, falling back to on-device models:", err);
             }
-        } catch (err) {
-            console.error("Gemini analysis connection failed, falling back to on-device models:", err);
         }
 
         // Fallback to on-device models if Gemini fails or no API key
-        const transcriptChunks = (transcription.chunks || []).map((chunk: { text: string }) => ({
+        const transcriptChunks = (transcription.chunks || []).map((chunk: { text: string, timestamp?: [number, number] }) => ({
              speaker: 'Speaker 1', 
-             text: chunk.text
+             text: chunk.text,
+             timestamp: chunk.timestamp
         }));
 
         progressCallback('Initializing analysis model (fallback)...');
@@ -147,36 +183,18 @@ export class OnDeviceAIService {
         progressCallback('Analyzing transcript (fallback)...');
         
         const summaryPrompt = `Summarize this ${industry} transcript: ${rawTranscript}`;
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const summaryResult = await analyzer(summaryPrompt, { max_new_tokens: 128 }) as any;
+        const summaryResult = await analyzer(summaryPrompt, { max_new_tokens: 128 });
         
         const todoPrompt = `Extract action items from this transcript: ${rawTranscript}`;
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const todoResult = await analyzer(todoPrompt, { max_new_tokens: 128 }) as any;
+        const todoResult = await analyzer(todoPrompt, { max_new_tokens: 128 });
         
         const outlinePrompt = `Create an outline for this transcript: ${rawTranscript}`;
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const outlineResult = await analyzer(outlinePrompt, { max_new_tokens: 128 }) as any;
-
-        const rawTodoText = todoResult[0].generated_text || '';
-        const actionItems: string[] = [];
-        let start = 0;
-        while (true) {
-            const end = rawTodoText.indexOf('. ', start);
-            if (end === -1) {
-                const item = rawTodoText.slice(start).trim();
-                if (item.length > 0) actionItems.push(item);
-                break;
-            }
-            const item = rawTodoText.slice(start, end).trim();
-            if (item.length > 0) actionItems.push(item);
-            start = end + 2; // length of '. '
-        }
+        const outlineResult = await analyzer(outlinePrompt, { max_new_tokens: 128 });
 
         return {
             transcript: transcriptChunks,
             summary: summaryResult[0].generated_text || 'No summary generated.',
-            action_items: actionItems,
+            action_items: (todoResult[0].generated_text || '').split('. ').filter((s: string) => s.trim().length > 0),
             outline: outlineResult[0].generated_text || 'No outline generated.'
         };
     }
