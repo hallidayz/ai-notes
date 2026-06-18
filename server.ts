@@ -11,10 +11,18 @@ import crypto from "crypto";
 import { GoogleGenAI, Type } from "@google/genai";
 
 const JWT_SECRET = process.env.JWT_SECRET || crypto.randomBytes(32).toString('hex');
+const IS_DESKTOP = process.env.AI_NOTES_DESKTOP === '1';
+const AUTH_COOKIE_OPTS = {
+  httpOnly: true,
+  secure: !IS_DESKTOP,
+  sameSite: IS_DESKTOP ? 'lax' as const : 'none' as const,
+  maxAge: 30 * 24 * 60 * 60 * 1000,
+};
 
 async function startServer() {
   const app = express();
-  const PORT = 3000;
+  const PORT = Number(process.env.PORT ?? 3000);
+  const HOST = process.env.HOST ?? '0.0.0.0';
 
   app.use(express.json({ limit: '50mb' }));
   app.use(cookieParser());
@@ -22,7 +30,7 @@ async function startServer() {
     secret: 'ai-notes-secret',
     resave: false,
     saveUninitialized: true,
-    cookie: { secure: true, sameSite: 'none', httpOnly: true }
+    cookie: { secure: !IS_DESKTOP, sameSite: IS_DESKTOP ? 'lax' : 'none', httpOnly: true }
   }));
 
   // Storage directory for "Server" storage option
@@ -68,7 +76,7 @@ async function startServer() {
     await writeJson(usersFile, users);
 
     const token = jwt.sign({ userId }, JWT_SECRET, { expiresIn: '30d' });
-    res.cookie('auth_token', token, { httpOnly: true, secure: true, sameSite: 'none', maxAge: 30 * 24 * 60 * 60 * 1000 });
+    res.cookie('auth_token', token, AUTH_COOKIE_OPTS);
     res.json({ success: true, user: { id: userId, email } });
   });
 
@@ -84,12 +92,12 @@ async function startServer() {
     if (!valid) return res.status(401).json({ error: "Invalid credentials" });
 
     const token = jwt.sign({ userId: user.id }, JWT_SECRET, { expiresIn: '30d' });
-    res.cookie('auth_token', token, { httpOnly: true, secure: true, sameSite: 'none', maxAge: 30 * 24 * 60 * 60 * 1000 });
+    res.cookie('auth_token', token, AUTH_COOKIE_OPTS);
     res.json({ success: true, user: { id: user.id, email } });
   });
 
   app.post("/api/auth/logout", (req, res) => {
-    res.clearCookie('auth_token', { httpOnly: true, secure: true, sameSite: 'none' });
+    res.clearCookie('auth_token', AUTH_COOKIE_OPTS);
     res.json({ success: true });
   });
 
@@ -591,16 +599,19 @@ ${inputContext}
     });
     app.use(vite.middlewares);
   } else {
-    const distPath = path.join(process.cwd(), 'dist');
+    const distPath = process.env.APP_DIST_DIR || path.join(process.cwd(), 'dist');
     app.use(express.static(distPath));
     app.get('*all', (req, res) => {
       res.sendFile(path.join(distPath, 'index.html'));
     });
   }
 
-  app.listen(PORT, "0.0.0.0", () => {
+  app.listen(PORT, HOST, () => {
     console.log(`Server running on http://localhost:${PORT}`);
   });
 }
 
-startServer();
+startServer().catch((err) => {
+  console.error('Server failed to start:', err);
+  process.exit(1);
+});

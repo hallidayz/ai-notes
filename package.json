@@ -1,14 +1,32 @@
 {
   "name": "ai-notes",
+  "productName": "AI Notes",
   "private": true,
-  "version": "0.0.0",
+  "version": "2.0.0",
+  "description": "Private, secure, on-device AI meeting notes",
+  "author": {
+    "name": "hallidayz"
+  },
   "type": "module",
+  "main": "electron/main.cjs",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/hallidayz/ai-notes.git"
+  },
   "scripts": {
     "dev": "tsx server.ts",
     "build": "vite build && esbuild server.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --outfile=dist/server.cjs",
     "start": "node dist/server.cjs",
     "preview": "vite preview",
-    "lint": "eslint ."
+    "lint": "eslint .",
+    "icons:electron": "node scripts/create-electron-icon.mjs",
+    "clean": "node -e \"const fs=require('fs'); for (const d of ['dist','release']) fs.rmSync(d,{recursive:true,force:true});\"",
+    "electron:build": "npm run build",
+    "electron:dev": "npm run electron:build && cross-env NODE_ENV=production AI_NOTES_DESKTOP=1 electron .",
+    "package:mac": "npm run electron:build && electron-builder --mac --arm64 --x64",
+    "package:mac:dmg": "npm run electron:build && electron-builder --mac dmg --arm64 --x64",
+    "package:win": "npm run electron:build && electron-builder --win --x64",
+    "package:win:portable": "npm run electron:build && electron-builder --win portable --x64"
   },
   "dependencies": {
     "@capacitor/android": "^8.3.4",
@@ -20,6 +38,7 @@
     "axios": "^1.13.6",
     "bcryptjs": "^3.0.3",
     "cookie-parser": "^1.4.7",
+    "dotenv": "^17.2.3",
     "express": "^5.2.1",
     "express-session": "^1.19.0",
     "google-auth-library": "^10.6.2",
@@ -39,13 +58,85 @@
     "@types/jsonwebtoken": "^9.0.10",
     "@types/node": "^22.14.0",
     "@vitejs/plugin-react": "^5.0.0",
+    "cross-env": "^7.0.3",
+    "electron": "^41.2.1",
+    "electron-builder": "^26.8.1",
     "esbuild": "^0.28.0",
     "eslint": "^10.0.3",
     "eslint-plugin-react-hooks": "^7.0.1",
     "eslint-plugin-react-refresh": "^0.5.2",
     "globals": "^17.4.0",
+    "sharp": "^0.34.5",
     "typescript": "~5.8.2",
     "typescript-eslint": "^8.57.1",
     "vite": "^6.2.0"
+  },
+  "build": {
+    "appId": "com.acmi.ainotes",
+    "productName": "AI Notes",
+    "copyright": "Copyright © 2026 hallidayz",
+    "directories": {
+      "output": "release",
+      "buildResources": "electron/assets"
+    },
+    "files": [
+      "electron/**/*",
+      "dist/**/*",
+      "package.json",
+      "!**/*.map",
+      "!**/.DS_Store",
+      "!**/.git/**",
+      "!**/node_modules/.cache/**",
+      "!src/**",
+      "!server.ts",
+      "!server/**",
+      "!android/**"
+    ],
+    "asar": true,
+    "asarUnpack": [
+      "**/node_modules/onnxruntime-node/**",
+      "**/node_modules/@xenova/transformers/**",
+      "**/*.node"
+    ],
+    "mac": {
+      "category": "public.app-category.productivity",
+      "target": [
+        {
+          "target": "dmg",
+          "arch": ["arm64", "x64"]
+        }
+      ],
+      "hardenedRuntime": false,
+      "gatekeeperAssess": false,
+      "identity": null,
+      "artifactName": "${productName}-${version}-${arch}.${ext}"
+    },
+    "dmg": {
+      "title": "${productName} ${version}",
+      "writeUpdateInfo": false
+    },
+    "win": {
+      "target": [
+        { "target": "nsis", "arch": ["x64"] },
+        { "target": "portable", "arch": ["x64"] }
+      ],
+      "icon": "electron/assets/icon.png",
+      "artifactName": "${productName}-${version}-${arch}-setup.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowElevation": true,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "AI Notes",
+      "deleteAppDataOnUninstall": false,
+      "runAfterFinish": true
+    },
+    "portable": {
+      "artifactName": "${productName}-${version}-${arch}-portable.${ext}"
+    },
+    "npmRebuild": false
   }
 }
